@@ -22,6 +22,16 @@ import {
 //     KEIN Ersatz für echte 10-Hz-Hardware (Dragy/RaceBox). Dafür
 //     bräuchtest du eine native App + externes Bluetooth-GNSS-Modul.
 //
+//  1b) SENSOR-FUSION: Zwischen den ~1-Hz-GPS-Korrekturen sagt der
+//     Beschleunigungssensor (~60 Hz) Geschwindigkeit & Strecke voraus
+//     (1D-Kalman-Filter). Schwerkraft und Fahrtrichtungs-Achse werden
+//     beim Anfahren automatisch kalibriert. Das Handy muss dafür FEST
+//     montiert sein (Halterung) - in der Hand/Hosentasche wird die
+//     Achsen-Kalibrierung unbrauchbar. iOS fragt einmalig um Erlaubnis
+//     für Bewegungssensoren. Deutlich reaktionsschneller und glatter
+//     als nur GPS, aber weiterhin keine Profi-Hardware: Handy-Sensoren
+//     rauschen und driften.
+//
 //  2) Renn-Synchronisation: Die Ampel wird über die Server-Zeit auf
 //     beiden Handys synchronisiert. Wegen Netzwerk-/Uhren-Schwankungen
 //     nur auf ~0,1-0,3 s genau. Jeder misst seine EIGENE Zeit von seiner
@@ -121,43 +131,167 @@ async function estimateServerOffset(uid) {
 }
 
 // =====================================================================
-//  GPS-Hook: liefert interpolierte Geschwindigkeit (10-Hz-Takt),
-//  kumulierte Strecke und ruft onSample pro echtem Fix auf.
-//  Enthält zusätzlich einen Simulationsmodus (startSim).
+//  FUSION-Hook (GPS + Bewegungssensor, 1D-Kalman-Filter):
+//  - GPS (~1 Hz): absolute Geschwindigkeits-KORREKTUR + Strecke (Haversine)
+//  - Beschleunigungssensor (~60 Hz): sagt Geschwindigkeit & Strecke
+//    ZWISCHEN den GPS-Fixes voraus (Vorhersage-Schritt)
+//  - Schwerkraft wird per Tiefpass geschätzt, die Fahrtrichtungs-Achse
+//    beim ersten kräftigen Anfahren automatisch kalibriert
+//  - Stillstands-Korrektur (ZUPT) verhindert Drift im Stand
+//  - Fällt automatisch auf "nur GPS" zurück (Desktop, abgelehnte
+//    Berechtigung, Simulationsmodus)
+//  onSample feuert im Fusion-Betrieb mit ~60 Hz, sonst pro GPS-Fix.
 // =====================================================================
+// iOS verlangt eine explizite Berechtigung für die Bewegungssensoren.
+// Die Abfrage MUSS aus einer Nutzer-Geste (Button-Klick) heraus erfolgen.
+let motionPermissionGranted = null; // null = noch nicht gefragt
+async function requestMotionPermission() {
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const p = await DeviceMotionEvent.requestPermission();
+      motionPermissionGranted = p === 'granted';
+    } else {
+      motionPermissionGranted = true; // Android/Desktop: keine Abfrage nötig
+    }
+  } catch {
+    motionPermissionGranted = false;
+  }
+  return motionPermissionGranted;
+}
+
 function useGpsTracker() {
   const [speedKmh, setSpeedKmh] = useState(0);
   const [distanceM, setDistanceM] = useState(0);
+  const [accelMs2, setAccelMs2] = useState(0);
+  const [peakG, setPeakG] = useState(0);
   const [accuracyM, setAccuracyM] = useState(null);
   const [tracking, setTracking] = useState(false);
   const [simulated, setSimulated] = useState(false);
+  const [fusionActive, setFusionActive] = useState(false);
 
   const watchId = useRef(null);
   const intId = useRef(null);
   const simId = useRef(null);
-  const lastFix = useRef(null);
-  const prevFix = useRef(null);
-  const cum = useRef(0);
   const onSampleRef = useRef(null);
+  const motionListenerRef = useRef(null);
 
-  // 10-Hz-Takt: interpoliert/extrapoliert zwischen echten Fixes (nur Anzeige)
-  const tick = () => {
-    const lf = lastFix.current;
-    const pf = prevFix.current;
-    if (!lf) return;
-    let est = lf.speedMps;
-    if (pf) {
-      const dt = lf.tPerf - pf.tPerf;
-      if (dt > 0) {
-        const slope = (lf.speedMps - pf.speedMps) / dt;
-        const ahead = Math.min(performance.now() - lf.tPerf, 1200); // max 1,2 s extrapolieren
-        est = lf.speedMps + slope * ahead;
-      }
+  // --- Kalman-Zustand (Fusion) ---
+  const vRef = useRef(0); // m/s, fusionierte Geschwindigkeit
+  const PRef = useRef(25); // Unsicherheit der Schätzung
+  const distRef = useRef(0); // m, fusionierte Strecke
+  const gpsDistRef = useRef(0); // m, reine GPS-Haversine-Summe
+  const lastGps = useRef(null);
+  // --- IMU-Zustand ---
+  const imuActive = useRef(false);
+  const lastImuT = useRef(null);
+  const gravRef = useRef(null); // Tiefpass-Schätzung der Schwerkraft
+  const fwdRef = useRef(null); // Fahrtrichtungs-Achse im Geräte-Koordinatensystem
+  const aLongSmooth = useRef(0);
+  const peakGRef = useRef(0);
+  const lastSample = useRef(null); // {t, v, d} für die prev-Werte in onSample
+  // --- Anzeige-Fallback ohne IMU (Interpolation wie bisher) ---
+  const lastZ = useRef(null);
+  const prevZ = useRef(null);
+
+  const Q = 0.6; // Prozessrauschen: Unsicherheit wächst pro Sekunde ohne GPS-Korrektur
+
+  const emitSample = (tMs) => {
+    const prev = lastSample.current;
+    const cur = { t: tMs, v: vRef.current, d: distRef.current };
+    lastSample.current = cur;
+    if (prev && onSampleRef.current) {
+      onSampleRef.current({
+        tMs: cur.t,
+        prevTMs: prev.t,
+        speedKmh: cur.v * 3.6,
+        prevSpeedKmh: prev.v * 3.6,
+        cumDist: cur.d,
+        prevCumDist: prev.d,
+      });
     }
-    if (est < 0) est = 0;
-    setSpeedKmh(est * 3.6);
   };
 
+  // ---- Bewegungssensor (~60 Hz): VORHERSAGE-Schritt des Kalman-Filters ----
+  const handleMotion = (e) => {
+    const ag = e.accelerationIncludingGravity;
+    if (!ag || ag.x == null) return;
+    const now = performance.now();
+    const dt = lastImuT.current != null ? Math.min((now - lastImuT.current) / 1000, 0.1) : 0;
+    lastImuT.current = now;
+    if (dt <= 0) return;
+
+    if (!imuActive.current) {
+      imuActive.current = true;
+      setFusionActive(true);
+    }
+
+    // 1) Schwerkraft per Tiefpass schätzen (Zeitkonstante ~3 s)
+    const aG = Math.exp(-dt / 3);
+    if (!gravRef.current) gravRef.current = { x: ag.x, y: ag.y, z: ag.z };
+    const g = gravRef.current;
+    g.x = aG * g.x + (1 - aG) * ag.x;
+    g.y = aG * g.y + (1 - aG) * ag.y;
+    g.z = aG * g.z + (1 - aG) * ag.z;
+
+    // 2) Lineare Beschleunigung (ohne Schwerkraft). Wenn das OS sie schon
+    //    bereitstellt (Gyro-Fusion), ist die genauer als unsere Subtraktion.
+    let lin;
+    if (e.acceleration && e.acceleration.x != null) {
+      lin = { x: e.acceleration.x, y: e.acceleration.y, z: e.acceleration.z };
+    } else {
+      lin = { x: ag.x - g.x, y: ag.y - g.y, z: ag.z - g.z };
+    }
+
+    // 3) Auf die horizontale Ebene projizieren (Vertikal-Anteil entfernen)
+    const gm = Math.hypot(g.x, g.y, g.z) || 9.81;
+    const gu = { x: g.x / gm, y: g.y / gm, z: g.z / gm };
+    const dotG = lin.x * gu.x + lin.y * gu.y + lin.z * gu.z;
+    const ah = { x: lin.x - dotG * gu.x, y: lin.y - dotG * gu.y, z: lin.z - dotG * gu.z };
+    const ahMag = Math.hypot(ah.x, ah.y, ah.z);
+
+    // 4) Fahrtrichtungs-Achse automatisch kalibrieren: Das erste kräftige
+    //    Anfahren aus dem Stand definiert "vorwärts". Danach wird die Achse
+    //    bei jeder kräftigen Längsbeschleunigung langsam nachgeführt
+    //    (Vorzeichen beachten: Bremsen zeigt nach hinten).
+    if (!fwdRef.current) {
+      if (vRef.current < 1.5 && ahMag > 1.2) {
+        fwdRef.current = { x: ah.x / ahMag, y: ah.y / ahMag, z: ah.z / ahMag };
+      }
+    } else if (ahMag > 1.0) {
+      const f = fwdRef.current;
+      const s = Math.sign(ah.x * f.x + ah.y * f.y + ah.z * f.z) || 1;
+      const b = 0.03;
+      f.x = (1 - b) * f.x + b * s * (ah.x / ahMag);
+      f.y = (1 - b) * f.y + b * s * (ah.y / ahMag);
+      f.z = (1 - b) * f.z + b * s * (ah.z / ahMag);
+      const fm = Math.hypot(f.x, f.y, f.z) || 1;
+      f.x /= fm; f.y /= fm; f.z /= fm;
+    }
+
+    // 5) Längs-Beschleunigung mit Vorzeichen (Beschleunigen + / Bremsen -)
+    const f = fwdRef.current;
+    const aLong = f ? ah.x * f.x + ah.y * f.y + ah.z * f.z : 0;
+    aLongSmooth.current = 0.8 * aLongSmooth.current + 0.2 * aLong;
+    if (aLong < 15 && aLong / 9.81 > peakGRef.current && vRef.current > 0.5) {
+      peakGRef.current = aLong / 9.81;
+    }
+
+    // 6) Kalman-VORHERSAGE: Geschwindigkeit & Strecke fortschreiben
+    vRef.current = Math.max(0, vRef.current + aLong * dt);
+    PRef.current += Q * dt;
+    distRef.current += vRef.current * dt;
+
+    // Stillstands-Korrektur (ZUPT): am Stand nicht "davondriften"
+    const gpsSpd = lastGps.current?.speed ?? 0;
+    if (ahMag < 0.3 && vRef.current < 0.8 && gpsSpd < 0.6) {
+      vRef.current *= 0.9;
+      if (vRef.current < 0.05) vRef.current = 0;
+    }
+
+    emitSample(Date.now());
+  };
+
+  // ---- GPS (~1 Hz): KORREKTUR-Schritt des Kalman-Filters ----
   const handlePos = (pos) => {
     const acc = pos.coords.accuracy;
     // Ungenaue Fixes verwerfen (in Gebäuden o.ä.)
@@ -167,56 +301,89 @@ function useGpsTracker() {
     }
     setAccuracyM(acc ?? null);
 
-    const tPerf = performance.now();
     const tMs = pos.timestamp;
-    const fix = {
-      lat: pos.coords.latitude,
-      lng: pos.coords.longitude,
-      speedMps: pos.coords.speed ?? null,
-      tPerf,
-      tMs,
-    };
+    let z = pos.coords.speed; // m/s, kann null sein
+    const fromDoppler = z != null;
 
-    const prevCum = cum.current;
-    if (lastFix.current) {
-      const d = haversine(lastFix.current.lat, lastFix.current.lng, fix.lat, fix.lng);
-      const dtSec = Math.max((tMs - lastFix.current.tMs) / 1000, 0.001);
-      const derivedMps = d / dtSec;
+    if (lastGps.current) {
+      const d = haversine(lastGps.current.lat, lastGps.current.lng, pos.coords.latitude, pos.coords.longitude);
+      const dtS = Math.max((tMs - lastGps.current.t) / 1000, 0.001);
+      if (d > 0.4) gpsDistRef.current += d;
       // Wenn der Browser keine Geschwindigkeit liefert: aus Strecke/Zeit ableiten
-      if (fix.speedMps == null) fix.speedMps = derivedMps;
-      if (d > 0.4) {
-        cum.current += d;
-        setDistanceM(cum.current);
-      }
-      prevFix.current = lastFix.current;
-
-      const payload = {
-        tMs,
-        prevTMs: lastFix.current.tMs,
-        speedKmh: fix.speedMps * 3.6,
-        prevSpeedKmh: (lastFix.current.speedMps ?? 0) * 3.6,
-        cumDist: cum.current,
-        prevCumDist: prevCum,
-      };
-      lastFix.current = fix;
-      if (onSampleRef.current) onSampleRef.current(payload);
-    } else {
-      if (fix.speedMps == null) fix.speedMps = 0;
-      lastFix.current = fix;
+      if (z == null) z = d / dtS;
+      // Fusions-Strecke sanft zur GPS-Strecke ziehen (verhindert IMU-Drift)
+      distRef.current += 0.3 * (gpsDistRef.current - distRef.current);
+    } else if (z == null) {
+      z = 0;
     }
+    lastGps.current = { lat: pos.coords.latitude, lng: pos.coords.longitude, t: tMs, speed: z };
+
+    // Kalman-KORREKTUR (Doppler-Geschwindigkeit ist genauer als abgeleitete)
+    const R = fromDoppler ? 0.35 : 1.5;
+    const K = PRef.current / (PRef.current + R);
+    vRef.current = Math.max(0, vRef.current + K * (z - vRef.current));
+    PRef.current *= (1 - K);
+
+    if (!imuActive.current) {
+      // Fallback ohne Bewegungssensor (Desktop, abgelehnt, Simulation):
+      // Verhalten wie v2 — onSample pro Fix, Anzeige interpoliert
+      prevZ.current = lastZ.current;
+      lastZ.current = { v: vRef.current, tPerf: performance.now() };
+      distRef.current = gpsDistRef.current;
+      emitSample(tMs);
+    }
+  };
+
+  // 10-Hz-Anzeige-Takt
+  const displayTick = () => {
+    if (imuActive.current) {
+      setSpeedKmh(vRef.current * 3.6);
+      setDistanceM(distRef.current);
+      setAccelMs2(aLongSmooth.current);
+      setPeakG(peakGRef.current);
+      return;
+    }
+    // Ohne IMU: zwischen den GPS-Fixes extrapolieren (flüssige Anzeige)
+    const lz = lastZ.current;
+    const pz = prevZ.current;
+    let v = vRef.current;
+    if (lz && pz) {
+      const dt = lz.tPerf - pz.tPerf;
+      if (dt > 0) {
+        const slope = (lz.v - pz.v) / dt;
+        const ahead = Math.min(performance.now() - lz.tPerf, 1200);
+        v = Math.max(0, lz.v + slope * ahead);
+      }
+    }
+    setSpeedKmh(v * 3.6);
+    setDistanceM(distRef.current);
   };
 
   const resetState = (onSample) => {
     onSampleRef.current = onSample || null;
-    lastFix.current = null;
-    prevFix.current = null;
-    cum.current = 0;
+    vRef.current = 0;
+    PRef.current = 25;
+    distRef.current = 0;
+    gpsDistRef.current = 0;
+    lastGps.current = null;
+    lastImuT.current = null;
+    gravRef.current = null;
+    fwdRef.current = null;
+    aLongSmooth.current = 0;
+    peakGRef.current = 0;
+    lastSample.current = null;
+    lastZ.current = null;
+    prevZ.current = null;
+    imuActive.current = false;
+    setFusionActive(false);
     setDistanceM(0);
     setSpeedKmh(0);
+    setAccelMs2(0);
+    setPeakG(0);
     setAccuracyM(null);
   };
 
-  const start = (onSample) => {
+  const start = async (onSample) => {
     if (!('geolocation' in navigator)) {
       alert('GPS wird von deinem Gerät nicht unterstützt. Nutze den Simulationsmodus.');
       return false;
@@ -224,6 +391,14 @@ function useGpsTracker() {
     resetState(onSample);
     setSimulated(false);
     setTracking(true);
+
+    // Bewegungssensor aktivieren (falls erlaubt) -> Sensor-Fusion
+    if (motionPermissionGranted === null) await requestMotionPermission();
+    if (motionPermissionGranted) {
+      motionListenerRef.current = handleMotion;
+      window.addEventListener('devicemotion', motionListenerRef.current);
+    }
+
     watchId.current = navigator.geolocation.watchPosition(
       handlePos,
       (err) => {
@@ -234,11 +409,12 @@ function useGpsTracker() {
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
-    intId.current = setInterval(tick, 100);
+    intId.current = setInterval(displayTick, 100);
     return true;
   };
 
   // ---- SIMULATION: erzeugt 1-Hz-"Fixes" mit Beschleunigungskurve ----
+  // (nutzt bewusst NUR den GPS-Pfad, keine echten Bewegungssensoren)
   const startSim = (onSample) => {
     resetState(onSample);
     setSimulated(true);
@@ -262,7 +438,7 @@ function useGpsTracker() {
       });
     }, SIM_DT * 1000);
 
-    intId.current = setInterval(tick, 100);
+    intId.current = setInterval(displayTick, 100);
     return true;
   };
 
@@ -273,6 +449,10 @@ function useGpsTracker() {
       navigator.geolocation.clearWatch(watchId.current);
       watchId.current = null;
     }
+    if (motionListenerRef.current) {
+      window.removeEventListener('devicemotion', motionListenerRef.current);
+      motionListenerRef.current = null;
+    }
     if (simId.current != null) {
       clearInterval(simId.current);
       simId.current = null;
@@ -282,17 +462,20 @@ function useGpsTracker() {
       intId.current = null;
     }
     setSpeedKmh(0);
+    setAccelMs2(0);
+    setFusionActive(false);
   };
 
   useEffect(() => {
     return () => {
       if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current);
+      if (motionListenerRef.current) window.removeEventListener('devicemotion', motionListenerRef.current);
       if (simId.current != null) clearInterval(simId.current);
       if (intId.current != null) clearInterval(intId.current);
     };
   }, []);
 
-  return { speedKmh, distanceM, accuracyM, tracking, simulated, start, startSim, stop };
+  return { speedKmh, distanceM, accelMs2, peakG, accuracyM, tracking, simulated, fusionActive, start, startSim, stop };
 }
 
 // --- Kleine Präsentationskomponenten ---
@@ -662,8 +845,10 @@ export default function App() {
       }
     }
     if (s.speedKmh > topRef.current) {
+      const prevInt = Math.floor(topRef.current);
       topRef.current = s.speedKmh;
-      setTopSpeed(s.speedKmh);
+      // Fusion liefert ~60 Samples/s -> nur rendern, wenn sich die Anzeige ändert
+      if (Math.floor(s.speedKmh) !== prevInt) setTopSpeed(s.speedKmh);
     }
     if (!zeroRecordedRef.current && launchRef.current != null && s.prevSpeedKmh < 100 && s.speedKmh >= 100) {
       const frac = (100 - s.prevSpeedKmh) / (s.speedKmh - s.prevSpeedKmh || 1);
@@ -768,6 +953,7 @@ export default function App() {
     if (!userProfile || !user) return;
     setRaceError('');
     useSimRef.current = false;
+    requestMotionPermission(); // iOS: jetzt fragen (Klick-Geste), nicht erst bei Grün
     try {
       const code = await freshCode();
       await setDoc(raceRef(code), {
@@ -798,6 +984,7 @@ export default function App() {
     if (!userProfile || !user) return;
     setRaceError('');
     useSimRef.current = false;
+    requestMotionPermission(); // iOS: jetzt fragen (Klick-Geste), nicht erst bei Grün
     const code = joinCodeInput.trim().toUpperCase();
     if (code.length < 4) {
       setRaceError('Bitte einen gültigen Code eingeben.');
@@ -835,6 +1022,7 @@ export default function App() {
 
   const startSolo = () => {
     useSimRef.current = false;
+    requestMotionPermission(); // iOS: jetzt fragen (Klick-Geste), nicht erst bei Grün
     setRaceMode('solo');
     setMyFinish(null);
     setRaceOutcome(null);
@@ -1005,6 +1193,11 @@ export default function App() {
                   <FlaskConical size={12} /> Simulation
                 </span>
               )}
+              {tracker.tracking && !tracker.simulated && (
+                <span className={`absolute top-8 text-[10px] font-bold uppercase tracking-wider ${tracker.fusionActive ? 'text-green-400' : 'text-slate-500'}`}>
+                  {tracker.fusionActive ? '⚡ Sensor-Fusion aktiv' : 'Nur GPS'}
+                </span>
+              )}
               {tracker.tracking && !tracker.simulated && tracker.accuracyM != null && tracker.accuracyM > 20 && (
                 <span className="absolute bottom-6 text-[10px] text-yellow-400">GPS ungenau ({Math.round(tracker.accuracyM)} m)</span>
               )}
@@ -1020,6 +1213,18 @@ export default function App() {
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center">
                 <span className="text-sm text-slate-400 mb-1">Top Speed</span>
                 <span className="text-3xl font-bold tabular-nums text-white">{Math.floor(topSpeed)}</span>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center">
+                <span className="text-sm text-slate-400 mb-1">Beschleunigung</span>
+                <span className={`text-3xl font-bold tabular-nums ${tracker.accelMs2 > 0.2 ? 'text-green-400' : tracker.accelMs2 < -0.2 ? 'text-red-400' : 'text-white'}`}>
+                  {tracker.accelMs2 >= 0 ? '+' : ''}{tracker.accelMs2.toFixed(1)}
+                </span>
+                <span className="text-[10px] text-slate-500 mt-0.5">m/s² (nur mit Fusion)</span>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center">
+                <span className="text-sm text-slate-400 mb-1">Max. Beschl.</span>
+                <span className="text-3xl font-bold tabular-nums text-white">{tracker.peakG.toFixed(2)}</span>
+                <span className="text-[10px] text-slate-500 mt-0.5">g</span>
               </div>
             </div>
 
@@ -1204,6 +1409,11 @@ export default function App() {
                   <span className="text-6xl font-black tabular-nums text-white">{Math.floor(tracker.speedKmh)}</span>
                   <span className="text-slate-400 font-semibold uppercase tracking-widest text-sm ml-2">km/h</span>
                   {tracker.simulated && <span className="ml-2 text-[10px] text-sky-400 uppercase">(Sim)</span>}
+                  {tracker.fusionActive && (
+                    <p className="text-xs text-slate-500 mt-1 tabular-nums">
+                      {tracker.accelMs2 >= 0 ? '+' : ''}{tracker.accelMs2.toFixed(1)} m/s²
+                    </p>
+                  )}
                 </div>
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
                   <ProgressRow name={userProfile.username} icon={userProfile.car.icon} dist={tracker.distanceM} target={target} isYou finishTime={myFinish} />
