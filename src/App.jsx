@@ -11,6 +11,7 @@ import {
 } from 'firebase/firestore';
 
 
+
 // --- Firebase: in der echten App durch eigene Werte ersetzen ---
 const firebaseConfig =
    {
@@ -40,15 +41,19 @@ async function fetchCarsApi(endpoint, params = {}) {
   Object.entries(params).forEach(([k, v]) => { if (v != null && v !== '') clean[k] = v; });
   const qs = new URLSearchParams({ endpoint, ...clean }).toString();
   const res = await fetch(`${CARS_BACKEND_URL}?${qs}`);
+  let body = null;
+  try { body = await res.json(); } catch {}
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { const j = await res.json(); if (j.error) msg = j.error; } catch {}
-    if (res.status === 400 || res.status === 403) {
-      msg = 'Dieser Cars-API-Endpunkt ist laut API Ninjas kostenpflichtig (Abo nötig).';
+    const apiMsg = body && body.error ? body.error : `HTTP ${res.status}`;
+    let msg = `Fehler ${res.status}: ${apiMsg}`;
+    if (res.status === 402 || res.status === 403) {
+      msg = `Kein Zugriff (${res.status}): ${apiMsg} – dieser Endpunkt braucht vermutlich einen kostenpflichtigen API-Ninjas-Plan.`;
+    } else if (res.status === 401) {
+      msg = `Schlüssel ungültig oder fehlt (401): bitte API_NINJAS_KEY in Vercel prüfen.`;
     }
     throw new Error(msg);
   }
-  return res.json();
+  return body;
 }
 
 // Erste Zahl aus einem Spec-Wert ziehen (z.B. "14.6 s" -> 14.6, "185 km/h" -> 185)
@@ -147,11 +152,13 @@ function buildCarObject(make, model, trim, specifications = {}, serie = '') {
 }
 
 // === Cars-API-MODUS =========================================================
-// 'free' = kostenloser, veralteter /v1/cars-Endpunkt (wenige Daten, KEIN Abo)
+// 'demo' = eingebaute Beispielautos, KEINE API nötig (immer kostenlos, zum Testen)
+// 'free' = kostenloser, veralteter /v1/cars-Endpunkt (wenige Daten; API Ninjas
+//          schränkt diesen Endpunkt inzwischen ein -> kann eine Fehlermeldung geben)
 // 'full' = make -> model -> trim -> cardetails (volle Daten, Business-Plan nötig)
 //
-// >>> ZUM WECHSELN: einfach diese eine Zeile auf 'full' setzen und neu laden. <<<
-const CARS_API_MODE = 'free';
+// >>> ZUM WECHSELN: einfach diese eine Zeile ändern und neu laden. <<<
+const CARS_API_MODE = 'demo';
 
 // --- Helfer für den kostenlosen Modus (/v1/cars liefert MPG-Stil-Daten) ---
 const mpgToL100 = (mpg) => (mpg ? Math.round((235.215 / mpg) * 10) / 10 : null);
@@ -195,6 +202,38 @@ function buildFreeCarObject(d) {
     dataMode: 'free',
   };
 }
+
+// --- Demo-Modus: eingebaute Beispielautos (keine API nötig) ---
+function demoCar(make, model, trim, d) {
+  const specs = {
+    'Max speed': `${d.speed} km/h`,
+    'Engine power': `${d.hp} hp`,
+    'Acceleration (0-100 km/h)': `${d.accel} s`,
+    'Maximum torque': `${d.torque} N*m`,
+    'Engine type': d.fuel,
+    'Capacity': d.cc ? `${d.cc} cm3` : '–',
+    'Number of cylinders': d.cyl ? `${d.cyl}` : '–',
+    'Drive wheels': d.drive,
+    'Gearbox type': d.gear,
+    'Curb weight': `${d.weight} kg`,
+  };
+  return buildCarObject(make, model, trim, specs, '');
+}
+
+const DEMO_CARS = [
+  demoCar('Volkswagen', 'Golf GTI', '2.0 TSI (245 hp)', { speed: 250, hp: 245, accel: 6.2, torque: 370, fuel: 'Gasoline', cc: 1984, cyl: 4, drive: 'Front wheel drive', gear: 'Automatic', weight: 1486 }),
+  demoCar('BMW', 'M3 Competition', '3.0 (510 hp)', { speed: 290, hp: 510, accel: 3.5, torque: 650, fuel: 'Gasoline', cc: 2993, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1730 }),
+  demoCar('Mercedes-Benz', 'A 45 S AMG', '2.0 (421 hp)', { speed: 270, hp: 421, accel: 3.9, torque: 500, fuel: 'Gasoline', cc: 1991, cyl: 4, drive: 'All wheel drive', gear: 'Automatic', weight: 1550 }),
+  demoCar('Audi', 'RS6 Avant', '4.0 V8 (600 hp)', { speed: 305, hp: 600, accel: 3.6, torque: 800, fuel: 'Gasoline', cc: 3996, cyl: 8, drive: 'All wheel drive', gear: 'Automatic', weight: 2075 }),
+  demoCar('Porsche', '911 Turbo S', '3.8 (650 hp)', { speed: 330, hp: 650, accel: 2.7, torque: 800, fuel: 'Gasoline', cc: 3745, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1640 }),
+  demoCar('Tesla', 'Model 3 Performance', 'Dual Motor (460 hp)', { speed: 261, hp: 460, accel: 3.3, torque: 660, fuel: 'Electric', drive: 'All wheel drive', gear: 'Automatic', weight: 1844 }),
+  demoCar('Ford', 'Mustang GT', '5.0 V8 (450 hp)', { speed: 250, hp: 450, accel: 4.6, torque: 529, fuel: 'Gasoline', cc: 4951, cyl: 8, drive: 'Rear wheel drive', gear: 'Automatic', weight: 1740 }),
+  demoCar('Toyota', 'GR Yaris', '1.6 (261 hp)', { speed: 230, hp: 261, accel: 5.5, torque: 360, fuel: 'Gasoline', cc: 1618, cyl: 3, drive: 'All wheel drive', gear: 'Manual', weight: 1280 }),
+  demoCar('Honda', 'Civic Type R', '2.0 (329 hp)', { speed: 275, hp: 329, accel: 5.4, torque: 420, fuel: 'Gasoline', cc: 1996, cyl: 4, drive: 'Front wheel drive', gear: 'Manual', weight: 1429 }),
+  demoCar('Nissan', 'GT-R', '3.8 V6 (570 hp)', { speed: 315, hp: 570, accel: 2.9, torque: 637, fuel: 'Gasoline', cc: 3799, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1752 }),
+  demoCar('Volkswagen', 'Polo GTI', '2.0 TSI (207 hp)', { speed: 240, hp: 207, accel: 6.5, torque: 320, fuel: 'Gasoline', cc: 1984, cyl: 4, drive: 'Front wheel drive', gear: 'Automatic', weight: 1355 }),
+  demoCar('Opel', 'Corsa', '1.2 Turbo (100 hp)', { speed: 192, hp: 100, accel: 9.9, torque: 205, fuel: 'Gasoline', cc: 1199, cyl: 3, drive: 'Front wheel drive', gear: 'Manual', weight: 1165 }),
+];
 
 // --- Firestore-Pfade ---
 const raceRef = (code) => doc(db, 'artifacts', appId, 'public', 'data', 'races', code);
@@ -1327,6 +1366,26 @@ export default function App() {
               className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
             />
           </div>
+
+          {/* ===== Demo-Modus: eingebaute Beispielautos (keine API) ===== */}
+          {CARS_API_MODE === 'demo' && (
+            <div>
+              <div className="bg-sky-500/10 border border-sky-500/30 rounded-lg p-2.5 text-[11px] text-sky-200 mb-3">
+                Demo-Modus: eingebaute Beispielautos, keine API nötig. Umschaltbar im Code (eine Zeile).
+              </div>
+              <label className="block text-sm text-slate-400 mb-2">Wähle dein Auto</label>
+              <select
+                value={chosenCar ? chosenCar.id : ''}
+                onChange={(e) => setChosenCar(DEMO_CARS.find((c) => c.id === e.target.value) || null)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
+              >
+                <option value="">– Auto wählen –</option>
+                {DEMO_CARS.map((c) => (
+                  <option key={c.id} value={c.id}>{c.icon} {c.make} {c.model} · {c.trim}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* ===== Kostenloser Modus: direkte Suche nach Marke + Modell ===== */}
           {CARS_API_MODE === 'free' && (
