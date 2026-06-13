@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Play, Square, Trophy, Activity, AlertTriangle, FastForward, User, Filter,
-  Sparkles, Loader2, Flag, Plus, Timer, Swords, Crown, ArrowLeft, FlaskConical,
+  Sparkles, Loader2, Flag, Plus, Timer, Swords, Crown, ArrowLeft, FlaskConical, Gauge,
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
@@ -31,6 +31,120 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'track-rank-v2';
 
 // KI-Backend (eigene Cloud Function, hält den Schlüssel serverseitig)
 const AI_BACKEND_URL = '/api/aiCoach';
+
+// Cars-API-Backend (Proxy zu API Ninjas, hält den Schlüssel serverseitig)
+const CARS_BACKEND_URL = '/api/cars';
+
+// Ruft einen Cars-API-Endpunkt über das eigene Backend auf
+async function fetchCarsApi(endpoint, params = {}) {
+  const clean = {};
+  Object.entries(params).forEach(([k, v]) => { if (v != null && v !== '') clean[k] = v; });
+  const qs = new URLSearchParams({ endpoint, ...clean }).toString();
+  const res = await fetch(`${CARS_BACKEND_URL}?${qs}`);
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const j = await res.json(); if (j.error) msg = j.error; } catch {}
+    if (res.status === 400 || res.status === 403) {
+      msg = 'Dieser Cars-API-Endpunkt ist laut API Ninjas kostenpflichtig (Abo nötig).';
+    }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+// Erste Zahl aus einem Spec-Wert ziehen (z.B. "14.6 s" -> 14.6, "185 km/h" -> 185)
+const numFromSpec = (s) => {
+  if (s == null) return null;
+  const m = String(s).replace(',', '.').match(/-?\d+(\.\d+)?/);
+  return m ? parseFloat(m[0]) : null;
+};
+
+// Passendes Emoji aus Karosserie/Kraftstoff ableiten (API liefert kein Icon)
+function pickCarIcon(spec = {}, serie = '') {
+  const fuel = String(spec['Engine type'] || spec['Fuel'] || '').toLowerCase();
+  const body = String(spec['Body type'] || serie || '').toLowerCase();
+  if (fuel.includes('electric') || fuel.includes('elektro')) return '⚡';
+  if (body.includes('suv') || body.includes('crossover') || body.includes('off-road')) return '🚙';
+  if (body.includes('coupe') || body.includes('roadster') || body.includes('cabrio') || body.includes('convertible')) return '🏎️';
+  if (body.includes('wagon') || body.includes('avant') || body.includes('estate') || body.includes('kombi')) return '🚐';
+  if (body.includes('pickup') || body.includes('truck')) return '🛻';
+  if (body.includes('van') || body.includes('minivan')) return '🚐';
+  return '🚗';
+}
+
+// Hervorgehobene Spec-Felder fürs Profil: [API-Schlüssel, deutsches Label]
+const SPEC_HIGHLIGHTS = [
+  ['Max speed', 'Höchstgeschw.'],
+  ['Engine power', 'Leistung'],
+  ['Acceleration (0-100 km/h)', '0–100 km/h'],
+  ['Maximum torque', 'Drehmoment'],
+  ['Engine type', 'Kraftstoff'],
+  ['Capacity', 'Hubraum'],
+  ['Number of cylinders', 'Zylinder'],
+  ['Drive wheels', 'Antrieb'],
+  ['Gearbox type', 'Getriebe'],
+  ['Curb weight', 'Leergewicht'],
+];
+
+// Reihenfolge/Labels für die vollständige Spec-Liste
+const SPEC_LABELS = {
+  'Max speed': 'Höchstgeschwindigkeit',
+  'Engine power': 'Motorleistung',
+  'Max power at RPM': 'Leistung bei Drehzahl',
+  'Maximum torque': 'Max. Drehmoment',
+  'Turnover of maximum torque': 'Drehmoment bei Drehzahl',
+  'Acceleration (0-100 km/h)': 'Beschleunigung 0–100 km/h',
+  'Engine type': 'Kraftstoffart',
+  'Fuel': 'Kraftstoff (Oktan)',
+  'Injection type': 'Einspritzung',
+  'Capacity': 'Hubraum',
+  'Number of cylinders': 'Anzahl Zylinder',
+  'Cylinder layout': 'Zylinderanordnung',
+  'Valves per cylinder': 'Ventile pro Zylinder',
+  'Cylinder bore': 'Bohrung',
+  'Stroke cycle': 'Hub',
+  'Drive wheels': 'Antrieb',
+  'Gearbox type': 'Getriebeart',
+  'Number of gear': 'Anzahl Gänge',
+  'Curb weight': 'Leergewicht',
+  'Full weight': 'Zul. Gesamtgewicht',
+  'Payload': 'Zuladung',
+  'Length': 'Länge',
+  'Width': 'Breite',
+  'Height': 'Höhe',
+  'Wheelbase': 'Radstand',
+  'Ground clearance': 'Bodenfreiheit',
+  'Front track': 'Spurweite vorn',
+  'Rear track': 'Spurweite hinten',
+  'Turning circle': 'Wendekreis',
+  'Front brakes': 'Bremsen vorn',
+  'Rear brakes': 'Bremsen hinten',
+  'Front suspension': 'Fahrwerk vorn',
+  'Back suspension': 'Fahrwerk hinten',
+  'Body type': 'Karosserie',
+  'Number of seater': 'Sitzplätze',
+  'Fuel tank capacity': 'Tankvolumen',
+  'City driving fuel consumption per 100 km': 'Verbrauch Stadt',
+  'Highway driving fuel consumption per 100 km': 'Verbrauch Autobahn',
+  'Mixed driving fuel consumption per 100 km': 'Verbrauch kombiniert',
+  'Cruising range': 'Reichweite',
+  'Min trunk capacity': 'Kofferraum (min)',
+  'Max trunk capacity': 'Kofferraum (max)',
+};
+
+// Aus make/model/trim/specs ein App-Auto-Objekt bauen (kompatibel zur restlichen App)
+function buildCarObject(make, model, trim, specifications = {}, serie = '') {
+  return {
+    id: `${make}|${model}|${trim}`.toLowerCase(),
+    make,
+    model,
+    trim,
+    serie,
+    icon: pickCarIcon(specifications, serie),
+    factory0to100: numFromSpec(specifications['Acceleration (0-100 km/h)']),
+    specs: specifications,
+  };
+}
 
 // --- Firestore-Pfade ---
 const raceRef = (code) => doc(db, 'artifacts', appId, 'public', 'data', 'races', code);
@@ -504,10 +618,16 @@ export default function App() {
   // Navigation
   const [activeTab, setActiveTab] = useState('tracker');
 
-  // Fahrzeug-Auswahl beim Setup
-  const [carDatabase, setCarDatabase] = useState([]);
+  // Fahrzeug-Auswahl beim Setup (über die API Ninjas Cars API)
   const [setupName, setSetupName] = useState('');
-  const [setupCarId, setSetupCarId] = useState('');
+  const [makeInput, setMakeInput] = useState('');
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [trims, setTrims] = useState([]);
+  const [selectedTrim, setSelectedTrim] = useState('');
+  const [chosenCar, setChosenCar] = useState(null);
+  const [setupLoading, setSetupLoading] = useState(''); // '', 'models', 'trims', 'details'
+  const [setupError, setSetupError] = useState('');
 
   // Bestenlisten
   const [leaderboard, setLeaderboard] = useState([]);
@@ -527,6 +647,7 @@ export default function App() {
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [tuningTips, setTuningTips] = useState(null);
+  const [showAllSpecs, setShowAllSpecs] = useState(false);
   const [isFetchingTuning, setIsFetchingTuning] = useState(false);
 
   // Renn-Modus
@@ -559,24 +680,73 @@ export default function App() {
   useEffect(() => { userProfileRef.current = userProfile; }, [userProfile]);
   useEffect(() => { raceModeRef.current = raceMode; }, [raceMode]);
 
-  // --- Fahrzeugdaten (simulierte API) ---
-  useEffect(() => {
-    const cars = [
-      { id: 'c1', make: 'Porsche', model: '911 Turbo S', icon: '🏎️', factory0to100: 2.7, type: 'sports' },
-      { id: 'c2', make: 'Tesla', model: 'Model 3 Perf.', icon: '⚡', factory0to100: 3.3, type: 'ev' },
-      { id: 'c3', make: 'BMW', model: 'M3 Competition', icon: '🚘', factory0to100: 3.9, type: 'sports' },
-      { id: 'c4', make: 'Mercedes', model: 'A45 AMG', icon: '🚙', factory0to100: 3.9, type: 'compact' },
-      { id: 'c5', make: 'VW', model: 'Golf 8 GTI', icon: '🚗', factory0to100: 6.2, type: 'compact' },
-      { id: 'c6', make: 'Ford', model: 'Mustang GT', icon: '🐎', factory0to100: 4.6, type: 'muscle' },
-      { id: 'c7', make: 'Audi', model: 'RS6 Avant', icon: '🏎️', factory0to100: 3.6, type: 'wagon' },
-      { id: 'c8', make: 'Toyota', model: 'GR Yaris', icon: '🚗', factory0to100: 5.5, type: 'compact' },
-    ];
-    const t = setTimeout(() => {
-      setCarDatabase(cars);
-      setSetupCarId(cars[0].id);
-    }, 400);
-    return () => clearTimeout(t);
-  }, []);
+  // --- Auto-Auswahl über die Cars API (3 Schritte: Marke -> Modell -> Trim) ---
+  const loadModels = async () => {
+    const make = makeInput.trim();
+    if (!make) return;
+    setSetupError('');
+    setSetupLoading('models');
+    setModels([]); setSelectedModel('');
+    setTrims([]); setSelectedTrim('');
+    setChosenCar(null);
+    try {
+      const data = await fetchCarsApi('carmodels', { make });
+      if (!Array.isArray(data) || data.length === 0) {
+        setSetupError(`Keine Modelle für „${make}" gefunden. Schreibweise prüfen (z.B. „Audi", „BMW").`);
+      } else {
+        setModels(data);
+      }
+    } catch (e) {
+      setSetupError(e.message);
+    } finally {
+      setSetupLoading('');
+    }
+  };
+
+  const loadTrims = async (model) => {
+    setSelectedModel(model);
+    setTrims([]); setSelectedTrim('');
+    setChosenCar(null);
+    if (!model) return;
+    setSetupError('');
+    setSetupLoading('trims');
+    try {
+      const data = await fetchCarsApi('cartrims', { make: makeInput.trim(), model, limit: 100 });
+      if (!Array.isArray(data) || data.length === 0) {
+        setSetupError('Keine Ausstattungen/Trims für dieses Modell gefunden.');
+      } else {
+        // Doppelte Trim-Namen zusammenfassen (es gibt oft mehrere Karosserien)
+        setTrims(data);
+      }
+    } catch (e) {
+      setSetupError(e.message);
+    } finally {
+      setSetupLoading('');
+    }
+  };
+
+  const loadDetails = async (trimIndex) => {
+    const idx = parseInt(trimIndex, 10);
+    const t = trims[idx];
+    setChosenCar(null);
+    if (!t) { setSelectedTrim(''); return; }
+    setSelectedTrim(String(idx));
+    setSetupError('');
+    setSetupLoading('details');
+    try {
+      const data = await fetchCarsApi('cardetails', { make: makeInput.trim(), model: selectedModel, trim: t.trim });
+      const entry = Array.isArray(data) ? data[0] : null;
+      if (!entry || !entry.specifications) {
+        setSetupError('Für diese Ausstattung sind keine Detaildaten verfügbar.');
+      } else {
+        setChosenCar(buildCarObject(entry.make, entry.model, entry.trim, entry.specifications, t.serie));
+      }
+    } catch (e) {
+      setSetupError(e.message);
+    } finally {
+      setSetupLoading('');
+    }
+  };
 
   // --- Auth ---
   useEffect(() => {
@@ -761,7 +931,11 @@ export default function App() {
     setIsAnalyzing(true);
     setAiAnalysis(null);
     const c = userProfile.car;
-    const prompt = `Ich bin auf einer abgesperrten Strecke mit meinem ${c.make} ${c.model} von 0 auf 100 km/h in ${zeroToHundred.toFixed(2)} Sekunden beschleunigt. Werksangabe: ${c.factory0to100} Sekunden. Gib mir ein kurzes, witziges Feedback in 2-3 Sätzen!`;
+    const factory = c.factory0to100 != null
+      ? `Die Werksangabe für 0-100 km/h liegt bei ${c.factory0to100} Sekunden.`
+      : '';
+    const power = c.specs?.['Engine power'] ? ` Das Auto hat ${c.specs['Engine power']}.` : '';
+    const prompt = `Ich bin auf einer abgesperrten Strecke mit meinem ${c.make} ${c.model} (${c.trim || 'Serienmodell'}) von 0 auf 100 km/h in ${zeroToHundred.toFixed(2)} Sekunden beschleunigt.${power} ${factory} Gib mir ein kurzes, witziges Feedback in 2-3 Sätzen!`;
     try {
       setAiAnalysis(await callAiBackend(prompt, 'Du bist ein cooler Motorsport-Coach für Trackdays.'));
     } catch {
@@ -789,12 +963,11 @@ export default function App() {
   // =================== Profil ===================
   const handleProfileSetup = async () => {
     const username = setupName.trim();
-    const selectedCar = carDatabase.find((c) => c.id === setupCarId);
-    if (!username || !selectedCar || !user) return;
-    const profileData = { username, car: selectedCar, points: 0, createdAt: serverTimestamp() };
+    if (!username || !chosenCar || !user) return;
+    const profileData = { username, car: chosenCar, points: 0, createdAt: serverTimestamp() };
     try {
       await setDoc(doc(db, 'artifacts', appId, 'users', user.uid), profileData);
-      await setDoc(racerRef(user.uid), { username, car: selectedCar, points: 0 }, { merge: true });
+      await setDoc(racerRef(user.uid), { username, car: chosenCar, points: 0 }, { merge: true });
       setUserProfile(profileData);
     } catch (e) {
       console.error('Profil-Speicherfehler:', e);
@@ -1062,10 +1235,13 @@ export default function App() {
     return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">Laden...</div>;
 
   if (!userProfile) {
+    const stepActive = (n) =>
+      n === 1 ? true : n === 2 ? models.length > 0 : n === 3 ? trims.length > 0 : false;
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center p-6 pt-20">
-        <div className="w-full max-w-sm bg-slate-900 p-6 rounded-2xl border border-slate-800 space-y-6">
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center p-6 pt-12 pb-16">
+        <div className="w-full max-w-sm bg-slate-900 p-6 rounded-2xl border border-slate-800 space-y-5">
           <h2 className="text-2xl font-bold text-center">Profil einrichten</h2>
+
           <div>
             <label className="block text-sm text-slate-400 mb-2">Dein Fahrername</label>
             <input
@@ -1077,31 +1253,109 @@ export default function App() {
               className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
             />
           </div>
+
+          {/* Schritt 1: Marke */}
           <div>
-            <label className="block text-sm text-slate-400 mb-2">Wähle dein Auto</label>
-            {carDatabase.length === 0 ? (
-              <div className="p-3 text-slate-500 animate-pulse">Fahrzeuge werden geladen...</div>
-            ) : (
+            <label className="block text-sm text-slate-400 mb-2">1 · Automarke</label>
+            <div className="flex gap-2">
+              <input
+                value={makeInput}
+                onChange={(e) => setMakeInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') loadModels(); }}
+                type="text"
+                placeholder="z.B. Audi, BMW, Toyota"
+                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+              />
+              <button
+                onClick={loadModels}
+                disabled={!makeInput.trim() || setupLoading === 'models'}
+                className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50 flex items-center"
+              >
+                {setupLoading === 'models' ? <Loader2 className="animate-spin" size={18} /> : 'Suchen'}
+              </button>
+            </div>
+          </div>
+
+          {/* Schritt 2: Modell */}
+          {stepActive(2) && (
+            <div className="animate-in fade-in duration-300">
+              <label className="block text-sm text-slate-400 mb-2">2 · Modell</label>
               <select
-                value={setupCarId}
-                onChange={(e) => setSetupCarId(e.target.value)}
+                value={selectedModel}
+                onChange={(e) => loadTrims(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
               >
-                {carDatabase.map((car) => (
-                  <option key={car.id} value={car.id}>
-                    {car.icon} {car.make} {car.model} (~{car.factory0to100}s)
+                <option value="">– Modell wählen –</option>
+                {models.map((m) => (<option key={m} value={m}>{m}</option>))}
+              </select>
+            </div>
+          )}
+
+          {/* Schritt 3: Trim/Ausstattung */}
+          {stepActive(3) && (
+            <div className="animate-in fade-in duration-300">
+              <label className="block text-sm text-slate-400 mb-2">3 · Ausstattung / Motorisierung</label>
+              <select
+                value={selectedTrim}
+                onChange={(e) => loadDetails(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
+              >
+                <option value="">– Variante wählen –</option>
+                {trims.map((t, i) => (
+                  <option key={`${t.trim}-${t.serie}-${i}`} value={i}>
+                    {t.trim}{t.serie ? ` · ${t.serie}` : ''}{t.generation ? ` · ${t.generation}` : ''}
                   </option>
                 ))}
               </select>
-            )}
-          </div>
+            </div>
+          )}
+
+          {setupLoading === 'details' && (
+            <div className="flex items-center justify-center gap-2 text-slate-400 text-sm py-2">
+              <Loader2 className="animate-spin" size={16} /> Fahrzeugdaten werden geladen…
+            </div>
+          )}
+
+          {/* Vorschau des gewählten Autos */}
+          {chosenCar && (
+            <div className="bg-slate-800 border border-orange-500/40 rounded-xl p-4 animate-in fade-in duration-300">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-4xl">{chosenCar.icon}</span>
+                <div>
+                  <p className="font-bold text-white leading-tight">{chosenCar.make} {chosenCar.model}</p>
+                  <p className="text-xs text-slate-400">{chosenCar.trim}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="bg-slate-900 rounded-lg p-2">
+                  <p className="text-[10px] text-slate-500 uppercase">Top</p>
+                  <p className="text-sm font-bold">{chosenCar.specs['Max speed'] || '–'}</p>
+                </div>
+                <div className="bg-slate-900 rounded-lg p-2">
+                  <p className="text-[10px] text-slate-500 uppercase">Leistung</p>
+                  <p className="text-sm font-bold">{chosenCar.specs['Engine power'] || '–'}</p>
+                </div>
+                <div className="bg-slate-900 rounded-lg p-2">
+                  <p className="text-[10px] text-slate-500 uppercase">0–100</p>
+                  <p className="text-sm font-bold">{chosenCar.specs['Acceleration (0-100 km/h)'] || '–'}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {setupError && (
+            <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg p-3">{setupError}</p>
+          )}
+
           <button
             onClick={handleProfileSetup}
-            disabled={carDatabase.length === 0 || !setupName.trim()}
+            disabled={!chosenCar || !setupName.trim()}
             className="w-full bg-orange-500 text-white font-bold rounded-lg p-3 hover:bg-orange-600 disabled:opacity-50"
           >
             Loslegen
           </button>
+
+          <p className="text-[11px] text-slate-600 text-center">Fahrzeugdaten: API Ninjas Cars API</p>
         </div>
       </div>
     );
@@ -1112,7 +1366,8 @@ export default function App() {
     if (leaderboardFilter === 'all') return true;
     if (leaderboardFilter === 'same_car') return run.car?.id === userProfile.car.id;
     if (leaderboardFilter === 'similar')
-      return run.car && Math.abs(run.car.factory0to100 - userProfile.car.factory0to100) <= 0.5;
+      return run.car && run.car.factory0to100 != null && userProfile.car.factory0to100 != null &&
+        Math.abs(run.car.factory0to100 - userProfile.car.factory0to100) <= 0.5;
     return true;
   });
 
@@ -1165,7 +1420,11 @@ export default function App() {
               <div>
                 <p className="text-xs text-slate-400 uppercase tracking-wider font-bold mb-1">Ausgewähltes Fahrzeug</p>
                 <h3 className="text-xl font-bold text-white">{userProfile.car.make} {userProfile.car.model}</h3>
-                <p className="text-sm text-slate-400">Werksangabe: {userProfile.car.factory0to100}s</p>
+                <p className="text-sm text-slate-400">
+                  {userProfile.car.factory0to100 != null
+                    ? `Werksangabe 0–100: ${userProfile.car.factory0to100}s`
+                    : (userProfile.car.trim || '–')}
+                </p>
               </div>
               <div className="text-5xl drop-shadow-lg">{userProfile.car.icon}</div>
             </div>
@@ -1564,7 +1823,9 @@ export default function App() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
               <div className="text-6xl mb-2">{userProfile.car.icon}</div>
               <h3 className="text-2xl font-bold text-white mb-1">{userProfile.username}</h3>
-              <p className="text-slate-400 mb-4">{userProfile.car.make} {userProfile.car.model}</p>
+              <p className="text-slate-400">{userProfile.car.make} {userProfile.car.model}</p>
+              {userProfile.car.trim && <p className="text-xs text-slate-500 mb-4">{userProfile.car.trim}</p>}
+              {!userProfile.car.trim && <div className="mb-4" />}
 
               <div className="flex items-center justify-center gap-3 bg-slate-800 rounded-xl py-3 mb-6">
                 <span className="text-3xl">{myRank.icon}</span>
@@ -1573,6 +1834,43 @@ export default function App() {
                   <p className="text-sm text-orange-400 font-bold tabular-nums">{userProfile.points || 0} Punkte</p>
                 </div>
               </div>
+
+              {/* Fahrzeugdaten aus der Cars API */}
+              {userProfile.car.specs && Object.keys(userProfile.car.specs).length > 0 && (
+                <div className="text-left mb-5">
+                  <p className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
+                    <Gauge size={16} className="text-orange-500" /> Fahrzeugdaten
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    {SPEC_HIGHLIGHTS.filter(([k]) => userProfile.car.specs[k]).map(([k, label]) => (
+                      <div key={k} className="bg-slate-800 rounded-lg p-3">
+                        <p className="text-[10px] text-slate-500 uppercase tracking-wider">{label}</p>
+                        <p className="text-sm font-bold text-white">{userProfile.car.specs[k]}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {showAllSpecs && (
+                    <div className="bg-slate-800/60 rounded-lg divide-y divide-slate-700/50 mb-3 animate-in fade-in duration-200">
+                      {Object.keys(SPEC_LABELS)
+                        .filter((k) => userProfile.car.specs[k] != null)
+                        .map((k) => (
+                          <div key={k} className="flex justify-between gap-3 px-3 py-2 text-sm">
+                            <span className="text-slate-400">{SPEC_LABELS[k]}</span>
+                            <span className="text-white text-right font-medium">{userProfile.car.specs[k]}</span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => setShowAllSpecs((v) => !v)}
+                    className="w-full py-2 rounded-lg text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  >
+                    {showAllSpecs ? 'Weniger anzeigen' : 'Alle technischen Daten anzeigen'}
+                  </button>
+                </div>
+              )}
 
               <div className="text-left mb-2">
                 <button
