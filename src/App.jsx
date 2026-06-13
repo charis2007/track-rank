@@ -2,14 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Play, Square, Trophy, Activity, AlertTriangle, FastForward, User, Filter,
   Sparkles, Loader2, Flag, Plus, Timer, Swords, Crown, ArrowLeft, FlaskConical, Gauge,
+  Phone, PhoneOff, Mic, MicOff, UserPlus, Search, Check, X, MessageCircle, PhoneCall, Volume2,
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import {
   getFirestore, collection, addDoc, onSnapshot, serverTimestamp, doc, setDoc,
-  getDoc, updateDoc, deleteDoc, increment,
+  getDoc, getDocs, updateDoc, deleteDoc, increment, runTransaction,
+  query, where, writeBatch, arrayUnion,
 } from 'firebase/firestore';
-
 
 
 // --- Firebase: in der echten App durch eigene Werte ersetzen ---
@@ -158,7 +159,7 @@ function buildCarObject(make, model, trim, specifications = {}, serie = '') {
 // 'full' = make -> model -> trim -> cardetails (volle Daten, Business-Plan nötig)
 //
 // >>> ZUM WECHSELN: einfach diese eine Zeile ändern und neu laden. <<<
-const CARS_API_MODE = 'free';
+const CARS_API_MODE = 'demo';
 
 // --- Helfer für den kostenlosen Modus (/v1/cars liefert MPG-Stil-Daten) ---
 const mpgToL100 = (mpg) => (mpg ? Math.round((235.215 / mpg) * 10) / 10 : null);
@@ -241,6 +242,29 @@ const racerRef = (uid) => doc(db, 'artifacts', appId, 'public', 'data', 'racers'
 const racersCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'racers');
 const runsCol = () => collection(db, 'artifacts', appId, 'public', 'data', 'runs');
 const clockRef = (uid) => doc(db, 'artifacts', appId, 'public', 'data', '_clock', uid);
+
+// --- Pfade für eindeutige Namen, Freunde & Gruppenchat ---
+const dataCol = (name) => collection(db, 'artifacts', appId, 'public', 'data', name);
+const usernameRef = (name) => doc(db, 'artifacts', appId, 'public', 'data', 'usernames', String(name).trim().toLowerCase());
+const friendReqCol = () => dataCol('friendRequests');
+const friendReqRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'friendRequests', id);
+const friendshipsCol = () => dataCol('friendships');
+const friendshipRef = (a, b) => doc(db, 'artifacts', appId, 'public', 'data', 'friendships', [a, b].sort().join('_'));
+const groupchatsCol = () => dataCol('groupchats');
+const groupchatRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'groupchats', id);
+const participantsCol = (id) => collection(groupchatRef(id), 'participants');
+const participantRef = (id, uid) => doc(groupchatRef(id), 'participants', uid);
+const signalRef = (id, pairId) => doc(groupchatRef(id), 'signals', pairId);
+const candCol = (id, pairId, who) => collection(signalRef(id, pairId), who);
+
+// STUN-Server (Verbindungsaufbau). Für strenge Netze zusätzlich TURN nötig.
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+};
+const MAX_GROUP_MEMBERS = 10;
 
 // --- Renn-Distanzen ---
 const DISTANCES = [
@@ -698,6 +722,215 @@ function ProgressRow({ name, icon, dist, target, isYou, finishTime }) {
   );
 }
 
+// =====================================================================
+//  useGroupCall: WebRTC-Mesh-Sprachanruf für einen Gruppenraum.
+//  - Mikrofon via getUserMedia
+//  - Signaling (Angebot/Antwort/ICE) über Firestore
+//  - Mesh: jeder verbindet sich mit jedem; der mit der kleineren UID ruft an
+//  - Nur Audio. Skaliert realistisch bis ~6-8 Teilnehmer.
+//  Rückgabe: { joined, joining, muted, participants, error, join, leave, toggleMute }
+// =====================================================================
+function useGroupCall(roomId, user, username) {
+  const [joined, setJoined] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [error, setError] = useState('');
+  const [remoteIds, setRemoteIds] = useState([]); // UIDs mit aktivem Audio (für Anzeige)
+
+  const localStream = useRef(null);
+  const pcs = useRef({}); // uid -> { pc, role, unsubs: [], pending: [] }
+  const audioEls = useRef({}); // uid -> HTMLAudioElement
+  const unsubParticipants = useRef(null);
+  const heartbeat = useRef(null);
+  const joinedRef = useRef(false);
+  const myUid = user?.uid;
+
+  const refreshRemoteIds = () => setRemoteIds(Object.keys(pcs.current));
+
+  const attachRemoteAudio = (uid, stream) => {
+    let el = audioEls.current[uid];
+    if (!el) {
+      el = document.createElement('audio');
+      el.autoplay = true;
+      el.playsInline = true;
+      audioEls.current[uid] = el;
+      document.body.appendChild(el);
+    }
+    el.srcObject = stream;
+    el.play?.().catch(() => {});
+  };
+
+  const dropPeer = (uid) => {
+    const entry = pcs.current[uid];
+    if (entry) {
+      entry.unsubs.forEach((u) => { try { u(); } catch {} });
+      try { entry.pc.close(); } catch {}
+      delete pcs.current[uid];
+    }
+    const el = audioEls.current[uid];
+    if (el) { try { el.srcObject = null; el.remove(); } catch {} delete audioEls.current[uid]; }
+    refreshRemoteIds();
+  };
+
+  const makePc = (otherUid) => {
+    const pairId = [myUid, otherUid].sort().join('_');
+    const amCaller = myUid < otherUid;
+    const who = amCaller ? 'callerCand' : 'calleeCand';
+    const otherWho = amCaller ? 'calleeCand' : 'callerCand';
+
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    const entry = { pc, role: amCaller ? 'caller' : 'callee', unsubs: [], pending: [], remoteSet: false };
+    pcs.current[otherUid] = entry;
+    refreshRemoteIds();
+
+    localStream.current.getTracks().forEach((t) => pc.addTrack(t, localStream.current));
+
+    const remote = new MediaStream();
+    pc.ontrack = (e) => {
+      e.streams[0].getTracks().forEach((tr) => remote.addTrack(tr));
+      attachRemoteAudio(otherUid, remote);
+    };
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        addDoc(candCol(roomId, pairId, who), e.candidate.toJSON()).catch(() => {});
+      }
+    };
+    pc.onconnectionstatechange = () => {
+      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+        // bei 'failed' Peer fallenlassen; rejoin baut neu auf
+        if (pc.connectionState === 'failed') dropPeer(otherUid);
+      }
+    };
+
+    // Gegnerische ICE-Kandidaten abonnieren
+    const unsubCand = onSnapshot(candCol(roomId, pairId, otherWho), (snap) => {
+      snap.docChanges().forEach((ch) => {
+        if (ch.type === 'added') {
+          const cand = new RTCIceCandidate(ch.doc.data());
+          if (entry.remoteSet) pc.addIceCandidate(cand).catch(() => {});
+          else entry.pending.push(cand);
+        }
+      });
+    });
+    entry.unsubs.push(unsubCand);
+
+    const drainPending = () => {
+      entry.remoteSet = true;
+      entry.pending.forEach((c) => pc.addIceCandidate(c).catch(() => {}));
+      entry.pending = [];
+    };
+
+    if (amCaller) {
+      (async () => {
+        try {
+          // alten Signal-Stand für dieses Paar überschreiben
+          await setDoc(signalRef(roomId, pairId), { caller: myUid, callee: otherUid, ts: serverTimestamp() });
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          await updateDoc(signalRef(roomId, pairId), { offer: { type: offer.type, sdp: offer.sdp } });
+        } catch (e) { /* ignore */ }
+      })();
+      const unsubAns = onSnapshot(signalRef(roomId, pairId), (snap) => {
+        const data = snap.data();
+        if (data?.answer && !entry.remoteSet) {
+          pc.setRemoteDescription(new RTCSessionDescription(data.answer)).then(drainPending).catch(() => {});
+        }
+      });
+      entry.unsubs.push(unsubAns);
+    } else {
+      const unsubOff = onSnapshot(signalRef(roomId, pairId), (snap) => {
+        const data = snap.data();
+        if (data?.offer && !entry.remoteSet) {
+          (async () => {
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+              drainPending();
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await updateDoc(signalRef(roomId, pairId), { answer: { type: answer.type, sdp: answer.sdp } });
+            } catch (e) { /* ignore */ }
+          })();
+        }
+      });
+      entry.unsubs.push(unsubOff);
+    }
+  };
+
+  const join = async () => {
+    if (joinedRef.current || joining || !roomId || !myUid) return;
+    setError('');
+    setJoining(true);
+    try {
+      localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (e) {
+      setError('Mikrofon-Zugriff verweigert oder nicht verfügbar.');
+      setJoining(false);
+      return;
+    }
+    joinedRef.current = true;
+    setJoined(true);
+    setJoining(false);
+
+    // Präsenz eintragen
+    await setDoc(participantRef(roomId, myUid), { username, joinedAt: serverTimestamp(), lastSeen: serverTimestamp() }).catch(() => {});
+    heartbeat.current = setInterval(() => {
+      updateDoc(participantRef(roomId, myUid), { lastSeen: serverTimestamp() }).catch(() => {});
+    }, 10000);
+
+    // Teilnehmer beobachten und Verbindungen auf-/abbauen
+    unsubParticipants.current = onSnapshot(participantsCol(roomId), (snap) => {
+      const now = Date.now();
+      const active = new Set();
+      snap.forEach((d) => {
+        if (d.id === myUid) return;
+        const data = d.data();
+        const seen = data.lastSeen?.toMillis?.() ?? now;
+        if (now - seen > 30000) return; // Karteileiche überspringen
+        active.add(d.id);
+        if (!pcs.current[d.id]) makePc(d.id);
+      });
+      // Wer weg ist -> Verbindung schließen
+      Object.keys(pcs.current).forEach((uid) => { if (!active.has(uid)) dropPeer(uid); });
+    });
+  };
+
+  const leave = async () => {
+    if (!joinedRef.current) return;
+    joinedRef.current = false;
+    setJoined(false);
+    if (heartbeat.current) { clearInterval(heartbeat.current); heartbeat.current = null; }
+    if (unsubParticipants.current) { unsubParticipants.current(); unsubParticipants.current = null; }
+    Object.keys(pcs.current).forEach((uid) => dropPeer(uid));
+    if (localStream.current) { localStream.current.getTracks().forEach((t) => t.stop()); localStream.current = null; }
+    setMuted(false);
+    await deleteDoc(participantRef(roomId, myUid)).catch(() => {});
+  };
+
+  const toggleMute = () => {
+    if (!localStream.current) return;
+    const next = !muted;
+    localStream.current.getAudioTracks().forEach((t) => { t.enabled = !next; });
+    setMuted(next);
+  };
+
+  // beim Schließen des Tabs Präsenz best-effort entfernen
+  useEffect(() => {
+    const onUnload = () => {
+      if (joinedRef.current && roomId && myUid) {
+        try { navigator.sendBeacon && deleteDoc(participantRef(roomId, myUid)); } catch {}
+      }
+    };
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onUnload);
+      leave();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  return { joined, joining, muted, participants: remoteIds, error, join, leave, toggleMute };
+}
+
 export default function App() {
   // Auth & Profil
   const [user, setUser] = useState(null);
@@ -730,6 +963,7 @@ export default function App() {
   const [topSpeed, setTopSpeed] = useState(0);
   const [zeroToHundred, setZeroToHundred] = useState(null);
   const tracker = useGpsTracker();
+  const call = useGroupCall(activeRoomId, user, userProfile?.username || '');
   const launchRef = useRef(null);
   const topRef = useRef(0);
   const zeroRecordedRef = useRef(false);
@@ -739,6 +973,20 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [tuningTips, setTuningTips] = useState(null);
   const [showAllSpecs, setShowAllSpecs] = useState(false);
+
+  // Freunde & Gruppenchat
+  const [friends, setFriends] = useState([]);
+  const [incomingReqs, setIncomingReqs] = useState([]);
+  const [outgoingReqs, setOutgoingReqs] = useState([]);
+  const [friendSearch, setFriendSearch] = useState('');
+  const [friendMsg, setFriendMsg] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [myRooms, setMyRooms] = useState([]);
+  const [activeRoomId, setActiveRoomId] = useState(null);
+  const [activeRoom, setActiveRoom] = useState(null);
+  const [roomParticipants, setRoomParticipants] = useState([]);
+  const [newRoomName, setNewRoomName] = useState('');
+  const [chatView, setChatView] = useState('friends'); // 'friends' | 'rooms' | 'room'
   const [isFetchingTuning, setIsFetchingTuning] = useState(false);
 
   // Renn-Modus
@@ -936,6 +1184,153 @@ export default function App() {
     return () => unsub();
   }, [userProfile]);
 
+  // --- Eingehende & ausgehende Freundschaftsanfragen ---
+  useEffect(() => {
+    if (!userProfile || !user) return;
+    const unsubIn = onSnapshot(query(friendReqCol(), where('toUid', '==', user.uid)), (snap) => {
+      setIncomingReqs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, (e) => console.error(e));
+    const unsubOut = onSnapshot(query(friendReqCol(), where('fromUid', '==', user.uid)), (snap) => {
+      setOutgoingReqs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, (e) => console.error(e));
+    return () => { unsubIn(); unsubOut(); };
+  }, [userProfile, user]);
+
+  // --- Freundesliste ---
+  useEffect(() => {
+    if (!userProfile || !user) return;
+    const unsub = onSnapshot(query(friendshipsCol(), where('uids', 'array-contains', user.uid)), (snap) => {
+      const list = snap.docs.map((d) => {
+        const data = d.data();
+        const otherUid = data.uids.find((u) => u !== user.uid);
+        return { id: d.id, uid: otherUid, username: data.names?.[otherUid] || 'Unbekannt' };
+      });
+      setFriends(list);
+    }, (e) => console.error(e));
+    return () => unsub();
+  }, [userProfile, user]);
+
+  // --- Eigene Gruppenräume ---
+  useEffect(() => {
+    if (!userProfile || !user) return;
+    const unsub = onSnapshot(query(groupchatsCol(), where('memberUids', 'array-contains', user.uid)), (snap) => {
+      setMyRooms(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, (e) => console.error(e));
+    return () => unsub();
+  }, [userProfile, user]);
+
+  // --- Aktiven Raum + dessen Teilnehmer live verfolgen ---
+  useEffect(() => {
+    if (!activeRoomId) { setActiveRoom(null); setRoomParticipants([]); return; }
+    const unsubRoom = onSnapshot(groupchatRef(activeRoomId), (snap) => {
+      setActiveRoom(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+    });
+    const unsubPart = onSnapshot(participantsCol(activeRoomId), (snap) => {
+      const now = Date.now();
+      setRoomParticipants(
+        snap.docs.map((d) => ({ uid: d.id, ...d.data() }))
+          .filter((p) => (p.lastSeen?.toMillis?.() ?? now) > now - 30000)
+      );
+    });
+    return () => { unsubRoom(); unsubPart(); };
+  }, [activeRoomId]);
+
+  // =================== Freunde ===================
+  const sendFriendRequest = async () => {
+    const name = friendSearch.trim();
+    if (!name || !user || !userProfile) return;
+    if (name.toLowerCase() === userProfile.username.toLowerCase()) {
+      setFriendMsg('Du kannst dich nicht selbst hinzufügen.');
+      return;
+    }
+    setFriendMsg('');
+    setSearching(true);
+    try {
+      const snap = await getDoc(usernameRef(name));
+      if (!snap.exists()) { setFriendMsg(`Kein Spieler namens „${name}" gefunden.`); return; }
+      const targetUid = snap.data().uid;
+      const targetName = snap.data().username;
+      if (targetUid === user.uid) { setFriendMsg('Das bist du selbst.'); return; }
+      if (friends.some((f) => f.uid === targetUid)) { setFriendMsg('Ihr seid bereits Freunde.'); return; }
+      if (outgoingReqs.some((r) => r.toUid === targetUid)) { setFriendMsg('Anfrage läuft bereits.'); return; }
+      // Falls die andere Person dir schon geschrieben hat -> direkt annehmen
+      const reverse = incomingReqs.find((r) => r.fromUid === targetUid);
+      if (reverse) { await acceptRequest(reverse); setFriendMsg(`${targetName} ist jetzt dein Freund!`); setFriendSearch(''); return; }
+      await addDoc(friendReqCol(), {
+        fromUid: user.uid, fromName: userProfile.username,
+        toUid: targetUid, toName: targetName,
+        createdAt: serverTimestamp(),
+      });
+      setFriendMsg(`Anfrage an ${targetName} gesendet.`);
+      setFriendSearch('');
+    } catch (e) {
+      console.error(e);
+      setFriendMsg('Fehler bei der Suche.');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const acceptRequest = async (req) => {
+    if (!user || !userProfile) return;
+    try {
+      const batch = writeBatch(db);
+      batch.set(friendshipRef(user.uid, req.fromUid), {
+        uids: [user.uid, req.fromUid].sort(),
+        names: { [user.uid]: userProfile.username, [req.fromUid]: req.fromName },
+        since: serverTimestamp(),
+      });
+      batch.delete(friendReqRef(req.id));
+      await batch.commit();
+    } catch (e) { console.error(e); }
+  };
+
+  const declineRequest = async (req) => {
+    try { await deleteDoc(friendReqRef(req.id)); } catch (e) { console.error(e); }
+  };
+
+  // =================== Gruppenräume ===================
+  const createRoom = async () => {
+    const name = newRoomName.trim() || `${userProfile.username}s Raum`;
+    if (!user || !userProfile) return;
+    try {
+      const ref = await addDoc(groupchatsCol(), {
+        name,
+        hostId: user.uid,
+        hostName: userProfile.username,
+        memberUids: [user.uid],
+        members: { [user.uid]: userProfile.username },
+        createdAt: serverTimestamp(),
+      });
+      setNewRoomName('');
+      setActiveRoomId(ref.id);
+      setChatView('room');
+    } catch (e) { console.error(e); }
+  };
+
+  const inviteFriendToRoom = async (friend) => {
+    if (!activeRoom) return;
+    if ((activeRoom.memberUids || []).length >= MAX_GROUP_MEMBERS) return;
+    if ((activeRoom.memberUids || []).includes(friend.uid)) return;
+    try {
+      await updateDoc(groupchatRef(activeRoom.id), {
+        memberUids: arrayUnion(friend.uid),
+        [`members.${friend.uid}`]: friend.username,
+      });
+    } catch (e) { console.error(e); }
+  };
+
+  const openRoom = (roomId) => {
+    setActiveRoomId(roomId);
+    setChatView('room');
+  };
+
+  const closeRoomView = async () => {
+    if (call.joined) await call.leave();
+    setActiveRoomId(null);
+    setChatView('rooms');
+  };
+
   // --- Renn-Dokument live verfolgen ---
   useEffect(() => {
     if (!raceId || raceMode !== 'lobby') return;
@@ -1077,14 +1472,28 @@ export default function App() {
   const handleProfileSetup = async () => {
     const username = setupName.trim();
     if (!username || !chosenCar || !user) return;
+    setSetupError('');
     const profileData = { username, car: chosenCar, points: 0, createdAt: serverTimestamp() };
     try {
-      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid), profileData);
-      await setDoc(racerRef(user.uid), { username, car: chosenCar, points: 0 }, { merge: true });
+      // Namen atomar reservieren: schlägt fehl, wenn er schon vergeben ist
+      await runTransaction(db, async (tx) => {
+        const uref = usernameRef(username);
+        const snap = await tx.get(uref);
+        if (snap.exists() && snap.data().uid !== user.uid) {
+          throw new Error('NAME_TAKEN');
+        }
+        tx.set(uref, { uid: user.uid, username });
+        tx.set(doc(db, 'artifacts', appId, 'users', user.uid), profileData);
+        tx.set(racerRef(user.uid), { username, car: chosenCar, points: 0 }, { merge: true });
+      });
       setUserProfile(profileData);
     } catch (e) {
-      console.error('Profil-Speicherfehler:', e);
-      alert('Profil konnte nicht gespeichert werden. Internetverbindung prüfen.');
+      if (e.message === 'NAME_TAKEN') {
+        setSetupError(`Der Name „${username}" ist bereits vergeben. Bitte wähle einen anderen.`);
+      } else {
+        console.error('Profil-Speicherfehler:', e);
+        setSetupError('Profil konnte nicht gespeichert werden. Internetverbindung prüfen.');
+      }
     }
   };
 
@@ -2108,14 +2517,219 @@ export default function App() {
             </div>
           </div>
         )}
+        {/* ===================== CHAT / FREUNDE ===================== */}
+        {activeTab === 'chat' && (
+          <div className="space-y-4 animate-in fade-in duration-300">
+            {chatView !== 'room' && (
+              <>
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <MessageCircle className="text-orange-500" /> Freunde & Chat
+                </h2>
+                <div className="flex gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800">
+                  <button onClick={() => setChatView('friends')} className={`flex-1 py-2 rounded-lg text-sm font-semibold ${chatView === 'friends' ? 'bg-orange-500 text-white' : 'text-slate-400'}`}>Freunde</button>
+                  <button onClick={() => setChatView('rooms')} className={`flex-1 py-2 rounded-lg text-sm font-semibold ${chatView === 'rooms' ? 'bg-orange-500 text-white' : 'text-slate-400'}`}>Gruppen-Calls</button>
+                </div>
+              </>
+            )}
+
+            {/* ----- Freunde ----- */}
+            {chatView === 'friends' && (
+              <>
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider">Freund hinzufügen</p>
+                  <div className="flex gap-2">
+                    <input
+                      value={friendSearch}
+                      onChange={(e) => setFriendSearch(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') sendFriendRequest(); }}
+                      placeholder="Benutzername suchen…"
+                      className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                    />
+                    <button onClick={sendFriendRequest} disabled={searching || !friendSearch.trim()} className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50 flex items-center">
+                      {searching ? <Loader2 className="animate-spin" size={18} /> : <UserPlus size={18} />}
+                    </button>
+                  </div>
+                  {friendMsg && <p className="text-sm text-slate-300">{friendMsg}</p>}
+                </div>
+
+                {incomingReqs.length > 0 && (
+                  <div className="bg-slate-900 border border-orange-500/30 rounded-2xl p-4 space-y-2">
+                    <p className="text-sm text-orange-400 font-bold uppercase tracking-wider">Anfragen ({incomingReqs.length})</p>
+                    {incomingReqs.map((r) => (
+                      <div key={r.id} className="flex items-center justify-between gap-2">
+                        <span className="font-semibold">{r.fromName}</span>
+                        <div className="flex gap-2">
+                          <button onClick={() => acceptRequest(r)} className="p-2 rounded-lg bg-green-600 hover:bg-green-500 text-white"><Check size={16} /></button>
+                          <button onClick={() => declineRequest(r)} className="p-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white"><X size={16} /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider p-4 pb-2">Deine Freunde ({friends.length})</p>
+                  {friends.length === 0 ? (
+                    <div className="p-6 text-center text-slate-500 text-sm">Noch keine Freunde. Such oben nach einem Benutzernamen.</div>
+                  ) : (
+                    <ul className="divide-y divide-slate-800/50">
+                      {friends.map((f) => (
+                        <li key={f.id} className="p-4 flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center font-bold">{f.username.charAt(0).toUpperCase()}</div>
+                          <span className="font-semibold">{f.username}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {outgoingReqs.length > 0 && (
+                  <p className="text-xs text-slate-500 text-center">{outgoingReqs.length} ausstehende gesendete Anfrage(n)</p>
+                )}
+              </>
+            )}
+
+            {/* ----- Räume-Übersicht ----- */}
+            {chatView === 'rooms' && (
+              <>
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider">Neuen Gruppen-Call erstellen</p>
+                  <div className="flex gap-2">
+                    <input
+                      value={newRoomName}
+                      onChange={(e) => setNewRoomName(e.target.value)}
+                      placeholder="Raumname (optional)"
+                      className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                    />
+                    <button onClick={createRoom} className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white flex items-center gap-1">
+                      <Plus size={18} /> Erstellen
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider p-4 pb-2">Deine Räume</p>
+                  {myRooms.length === 0 ? (
+                    <div className="p-6 text-center text-slate-500 text-sm">Noch keine Räume. Erstelle einen und lade Freunde ein.</div>
+                  ) : (
+                    <ul className="divide-y divide-slate-800/50">
+                      {myRooms.map((r) => (
+                        <li key={r.id}>
+                          <button onClick={() => openRoom(r.id)} className="w-full p-4 flex items-center justify-between hover:bg-slate-800/50">
+                            <div className="text-left">
+                              <p className="font-bold text-white">{r.name}</p>
+                              <p className="text-[11px] text-slate-400">{(r.memberUids || []).length}/{MAX_GROUP_MEMBERS} Mitglieder · Host: {r.hostName}</p>
+                            </div>
+                            <Phone size={18} className="text-orange-500" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* ----- Einzelner Raum mit Voice-Call ----- */}
+            {chatView === 'room' && activeRoom && (
+              <>
+                <button onClick={closeRoomView} className="text-slate-400 text-sm flex items-center gap-1">
+                  <ArrowLeft size={16} /> Zurück
+                </button>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 text-center">
+                  <h2 className="text-2xl font-bold mb-1">{activeRoom.name}</h2>
+                  <p className="text-sm text-slate-400 mb-4">{(activeRoom.memberUids || []).length}/{MAX_GROUP_MEMBERS} Mitglieder · {roomParticipants.length} im Call</p>
+
+                  {call.error && <p className="text-sm text-red-400 mb-3">{call.error}</p>}
+
+                  {!call.joined ? (
+                    <button
+                      onClick={call.join}
+                      disabled={call.joining}
+                      className="w-full py-4 rounded-xl font-bold text-lg bg-green-600 hover:bg-green-500 text-white flex items-center justify-center gap-2 disabled:opacity-50 active:scale-95 transition-all"
+                    >
+                      {call.joining ? <Loader2 className="animate-spin" size={20} /> : <PhoneCall size={20} />}
+                      {call.joining ? 'Verbinde…' : 'Call beitreten'}
+                    </button>
+                  ) : (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={call.toggleMute}
+                        className={`flex-1 py-4 rounded-xl font-bold flex items-center justify-center gap-2 ${call.muted ? 'bg-slate-700 text-slate-300' : 'bg-sky-600 text-white'}`}
+                      >
+                        {call.muted ? <MicOff size={20} /> : <Mic size={20} />}
+                        {call.muted ? 'Stumm' : 'Mikro an'}
+                      </button>
+                      <button onClick={call.leave} className="flex-1 py-4 rounded-xl font-bold bg-red-500 hover:bg-red-600 text-white flex items-center justify-center gap-2">
+                        <PhoneOff size={20} /> Verlassen
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Teilnehmer im Call */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-3">Im Call</p>
+                  {roomParticipants.length === 0 ? (
+                    <p className="text-slate-500 text-sm">Noch niemand im Call. Tippe „Call beitreten".</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {roomParticipants.map((p) => (
+                        <div key={p.uid} className="flex items-center gap-3">
+                          <div className="relative">
+                            <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center font-bold">{(p.username || '?').charAt(0).toUpperCase()}</div>
+                            <Volume2 size={12} className="absolute -bottom-1 -right-1 text-green-400" />
+                          </div>
+                          <span className="font-semibold">{p.username}{p.uid === user.uid ? ' (du)' : ''}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Freunde einladen */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-3">Freunde einladen</p>
+                  {friends.filter((f) => !(activeRoom.memberUids || []).includes(f.uid)).length === 0 ? (
+                    <p className="text-slate-500 text-sm">Alle Freunde sind schon im Raum – oder du hast noch keine.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {friends.filter((f) => !(activeRoom.memberUids || []).includes(f.uid)).map((f) => (
+                        <li key={f.id} className="flex items-center justify-between gap-2">
+                          <span className="font-semibold">{f.username}</span>
+                          <button
+                            onClick={() => inviteFriendToRoom(f)}
+                            disabled={(activeRoom.memberUids || []).length >= MAX_GROUP_MEMBERS}
+                            className="px-3 py-1.5 rounded-lg text-sm font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40 flex items-center gap-1"
+                          >
+                            <UserPlus size={14} /> Einladen
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {(activeRoom.memberUids || []).length >= MAX_GROUP_MEMBERS && (
+                    <p className="text-xs text-yellow-400 mt-2">Maximale Teilnehmerzahl ({MAX_GROUP_MEMBERS}) erreicht.</p>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-slate-600 text-center">
+                  Sprachübertragung per WebRTC. Bei Verbindungsproblemen hilft oft ein anderes WLAN/Netz.
+                </p>
+              </>
+            )}
+          </div>
+        )}
       </main>
 
       {/* Navigation */}
       <nav className="fixed bottom-0 w-full bg-slate-900/90 backdrop-blur-lg border-t border-slate-800 pb-safe">
-        <div className="max-w-md mx-auto flex justify-between p-2 px-6">
+        <div className="max-w-md mx-auto flex justify-between p-2 px-3">
           {[
             ['tracker', Activity, 'Track'],
             ['race', Swords, 'Race'],
+            ['chat', MessageCircle, 'Chat'],
             ['leaderboard', Trophy, 'Ranks'],
             ['profile', User, 'Profil'],
           ].map(([key, Icon, label]) => (
