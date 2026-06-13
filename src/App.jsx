@@ -10,44 +10,7 @@ import {
   getDoc, updateDoc, deleteDoc, increment,
 } from 'firebase/firestore';
 
-// =====================================================================
-//  EHRLICHE HINWEISE ZU DIESER VERSION (bitte lesen):
-//
-//  1) "10 Hz": Ein Browser kann KEINE echten 10-Hz-GPS-Daten liefern.
-//     watchPosition feuert in der Praxis ~1x pro Sekunde, die Rate ist
-//     nicht einstellbar. Diese App erzeugt einen 10-Hz-AUSGABE-Takt,
-//     indem sie zwischen den echten ~1-Hz-Fixes interpoliert (flüssige
-//     Anzeige) und den Ziel-Zeitpunkt zwischen zwei Messungen
-//     rechnerisch schätzt (genauer als nur "letzter Messwert"). Das ist
-//     KEIN Ersatz für echte 10-Hz-Hardware (Dragy/RaceBox). Dafür
-//     bräuchtest du eine native App + externes Bluetooth-GNSS-Modul.
-//
-//  1b) SENSOR-FUSION: Zwischen den ~1-Hz-GPS-Korrekturen sagt der
-//     Beschleunigungssensor (~60 Hz) Geschwindigkeit & Strecke voraus
-//     (1D-Kalman-Filter). Schwerkraft und Fahrtrichtungs-Achse werden
-//     beim Anfahren automatisch kalibriert. Das Handy muss dafür FEST
-//     montiert sein (Halterung) - in der Hand/Hosentasche wird die
-//     Achsen-Kalibrierung unbrauchbar. iOS fragt einmalig um Erlaubnis
-//     für Bewegungssensoren. Deutlich reaktionsschneller und glatter
-//     als nur GPS, aber weiterhin keine Profi-Hardware: Handy-Sensoren
-//     rauschen und driften.
-//
-//  2) Renn-Synchronisation: Die Ampel wird über die Server-Zeit auf
-//     beiden Handys synchronisiert. Wegen Netzwerk-/Uhren-Schwankungen
-//     nur auf ~0,1-0,3 s genau. Jeder misst seine EIGENE Zeit von seiner
-//     eigenen Ampel bis zu seinem Ziel.
-//
-//  3) SIMULATIONSMODUS (neu): Zum Testen am PC ohne echtes GPS/Fahren.
-//     Erzeugt eine realistische Beschleunigungskurve und speist sie in
-//     dieselbe Mess-Pipeline wie echtes GPS. Klar als "Simulation"
-//     gekennzeichnet. Achtung: Simulierte Rennen schreiben ECHTE Punkte
-//     in die Rangliste (damit du die Ranglisten-Logik wirklich testen
-//     kannst) - dein Punktestand verändert sich dadurch tatsächlich.
-//
-//  4) Fairness/Cheating: Ergebnisse werden von den Geräten selbst
-//     geschrieben. Ein manipulationssicheres System bräuchte eine
-//     serverseitige Prüfung (Cloud Function).
-// =====================================================================
+
 
 // --- Firebase: in der echten App durch eigene Werte ersetzen ---
 const firebaseConfig =
@@ -276,16 +239,22 @@ function useGpsTracker() {
       peakGRef.current = aLong / 9.81;
     }
 
-    // 6) Kalman-VORHERSAGE: Geschwindigkeit & Strecke fortschreiben
+    // 6) Kalman-VORHERSAGE: Geschwindigkeit fortschreiben
     vRef.current = Math.max(0, vRef.current + aLong * dt);
     PRef.current += Q * dt;
-    distRef.current += vRef.current * dt;
 
-    // Stillstands-Korrektur (ZUPT): am Stand nicht "davondriften"
+    // Stillstands-Korrektur (ZUPT): Nur wenn der Sensor wirklich ruhig ist
+    // (kaum Beschleunigung). So wird im Stand nicht weitergezählt, ein echtes
+    // Losfahren (hohe Längsbeschleunigung) aber sofort erkannt.
     const gpsSpd = lastGps.current?.speed ?? 0;
-    if (ahMag < 0.3 && vRef.current < 0.8 && gpsSpd < 0.6) {
-      vRef.current *= 0.9;
-      if (vRef.current < 0.05) vRef.current = 0;
+    const quiet = ahMag < 0.4 && Math.abs(aLong) < 0.6;
+    const stationary = quiet && (gpsSpd < 1.0 || vRef.current < 1.0);
+    if (stationary) {
+      vRef.current *= 0.6;
+      if (vRef.current < 0.1) vRef.current = 0;
+    } else {
+      // in Fahrt: Strecke integrieren
+      distRef.current += vRef.current * dt;
     }
 
     emitSample(Date.now());
@@ -308,9 +277,18 @@ function useGpsTracker() {
     if (lastGps.current) {
       const d = haversine(lastGps.current.lat, lastGps.current.lng, pos.coords.latitude, pos.coords.longitude);
       const dtS = Math.max((tMs - lastGps.current.t) / 1000, 0.001);
-      if (d > 0.4) gpsDistRef.current += d;
-      // Wenn der Browser keine Geschwindigkeit liefert: aus Strecke/Zeit ableiten
-      if (z == null) z = d / dtS;
+      // Bewegung NUR über die Doppler-Geschwindigkeit erkennen. Beim GPS-
+      // Kaltstart springt die Position teils um hunderte Meter, obwohl das
+      // Auto steht — die Doppler-Geschwindigkeit bleibt dabei ~0. Genau das
+      // hat bisher das Rennen sofort beendet.
+      const moving = fromDoppler ? pos.coords.speed > 1.0 : d / dtS > 3.0;
+      // Plausibilitätsgrenze: nie mehr Strecke zählen, als bei aktueller
+      // Geschwindigkeit physikalisch möglich ist (fängt Positions-Sprünge ab).
+      const maxStep = (Math.max(vRef.current, pos.coords.speed || 0) + 3) * dtS + 5;
+      const validStep = moving && d > 0.4 && d < maxStep;
+      if (validStep) gpsDistRef.current += d;
+      // Geschwindigkeit aus Strecke nur ableiten, wenn der Schritt gültig war
+      if (z == null) z = validStep ? d / dtS : 0;
       // Fusions-Strecke sanft zur GPS-Strecke ziehen (verhindert IMU-Drift)
       distRef.current += 0.3 * (gpsDistRef.current - distRef.current);
     } else if (z == null) {
@@ -568,6 +546,7 @@ export default function App() {
   const offsetRef = useRef(0);
   const greenLocalEpochRef = useRef(null);
   const finishRef = useRef(false);
+  const raceMovedRef = useRef(false);
   const raceTargetRef = useRef(500);
   const raceModeRef = useRef('menu');
   const onSampleRaceRef = useRef(null);
@@ -719,6 +698,7 @@ export default function App() {
     if (localPhase !== 'countdown' || greenLocalEpochRef.current == null) return;
     if (nowTick >= greenLocalEpochRef.current) {
       finishRef.current = false;
+      raceMovedRef.current = false;
       raceTargetRef.current = raceMode === 'lobby' ? (race?.distance || selectedDistance) : selectedDistance;
       setLocalPhase('racing');
       // Simulation oder echtes GPS?
@@ -901,7 +881,11 @@ export default function App() {
   // =================== Renn-Logik ===================
   const onSampleRace = (s) => {
     if (finishRef.current) return;
-    if (s.cumDist >= raceTargetRef.current && s.prevCumDist < raceTargetRef.current) {
+    // Schranke gegen GPS-Sprünge: das Ziel erst werten, wenn das Auto sich
+    // tatsächlich bewegt hat (irgendwann > 8 km/h). Sonst könnte ein
+    // Positions-Sprung im Stand das Rennen sofort "beenden".
+    if (s.speedKmh > 8) raceMovedRef.current = true;
+    if (raceMovedRef.current && s.cumDist >= raceTargetRef.current && s.prevCumDist < raceTargetRef.current) {
       const frac = (raceTargetRef.current - s.prevCumDist) / (s.cumDist - s.prevCumDist || 1);
       const crossT = s.prevTMs + frac * (s.tMs - s.prevTMs);
       const elapsed = (crossT - greenLocalEpochRef.current) / 1000;
@@ -1052,6 +1036,7 @@ export default function App() {
     useSimRef.current = false;
     greenLocalEpochRef.current = null;
     finishRef.current = false;
+    raceMovedRef.current = false;
     pointsAwardedRef.current = false;
     simGhostRef.current = null;
     setMyFinish(null);
