@@ -158,7 +158,7 @@ function buildCarObject(make, model, trim, specifications = {}, serie = '') {
 // 'full' = make -> model -> trim -> cardetails (volle Daten, Business-Plan nötig)
 //
 // >>> ZUM WECHSELN: einfach diese eine Zeile ändern und neu laden. <<<
-const CARS_API_MODE = 'demo';
+const CARS_API_MODE = 'free';
 
 // --- Helfer für den kostenlosen Modus (/v1/cars liefert MPG-Stil-Daten) ---
 const mpgToL100 = (mpg) => (mpg ? Math.round((235.215 / mpg) * 10) / 10 : null);
