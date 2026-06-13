@@ -11,7 +11,6 @@ import {
 } from 'firebase/firestore';
 
 
-
 // --- Firebase: in der echten App durch eigene Werte ersetzen ---
 const firebaseConfig =
    {
@@ -143,6 +142,57 @@ function buildCarObject(make, model, trim, specifications = {}, serie = '') {
     icon: pickCarIcon(specifications, serie),
     factory0to100: numFromSpec(specifications['Acceleration (0-100 km/h)']),
     specs: specifications,
+    dataMode: 'full',
+  };
+}
+
+// === Cars-API-MODUS =========================================================
+// 'free' = kostenloser, veralteter /v1/cars-Endpunkt (wenige Daten, KEIN Abo)
+// 'full' = make -> model -> trim -> cardetails (volle Daten, Business-Plan nötig)
+//
+// >>> ZUM WECHSELN: einfach diese eine Zeile auf 'full' setzen und neu laden. <<<
+const CARS_API_MODE = 'free';
+
+// --- Helfer für den kostenlosen Modus (/v1/cars liefert MPG-Stil-Daten) ---
+const mpgToL100 = (mpg) => (mpg ? Math.round((235.215 / mpg) * 10) / 10 : null);
+const FUEL_DE = { gas: 'Benzin', diesel: 'Diesel', electricity: 'Elektro' };
+const DRIVE_DE = { fwd: 'Frontantrieb', rwd: 'Heckantrieb', awd: 'Allrad', '4wd': 'Allrad' };
+const TRANS_DE = { a: 'Automatik', m: 'Schaltgetriebe' };
+
+function pickFreeIcon(d = {}) {
+  const fuel = String(d.fuel_type || '').toLowerCase();
+  const cls = String(d.class || '').toLowerCase();
+  if (fuel.includes('electric')) return '⚡';
+  if (cls.includes('sport utility') || cls.includes('suv')) return '🚙';
+  if (cls.includes('pickup') || cls.includes('truck')) return '🛻';
+  if (cls.includes('van') || cls.includes('minivan')) return '🚐';
+  if (cls.includes('two seater') || cls.includes('sport')) return '🏎️';
+  return '🚗';
+}
+
+function buildFreeCarObject(d) {
+  const liters = d.displacement != null ? `${d.displacement} l` : null;
+  const specs = {};
+  if (d.class) specs['Klasse'] = d.class;
+  if (liters) specs['Hubraum'] = liters;
+  if (d.cylinders != null) specs['Zylinder'] = `${d.cylinders}`;
+  if (d.drive) specs['Antrieb'] = DRIVE_DE[d.drive] || d.drive;
+  if (d.transmission) specs['Getriebe'] = TRANS_DE[d.transmission] || d.transmission;
+  if (d.fuel_type) specs['Kraftstoff'] = FUEL_DE[d.fuel_type] || d.fuel_type;
+  if (d.combination_mpg) specs['Verbrauch komb.'] = `${mpgToL100(d.combination_mpg)} l/100km`;
+  if (d.city_mpg) specs['Verbrauch Stadt'] = `${mpgToL100(d.city_mpg)} l/100km`;
+  if (d.highway_mpg) specs['Verbrauch Autobahn'] = `${mpgToL100(d.highway_mpg)} l/100km`;
+  if (d.year) specs['Baujahr'] = `${d.year}`;
+  const trimParts = [d.year, liters, d.transmission ? TRANS_DE[d.transmission] : null].filter(Boolean);
+  return {
+    id: `${d.make}|${d.model}|${d.year}|${d.cylinders}|${d.transmission}|${d.drive}`.toLowerCase(),
+    make: d.make,
+    model: d.model,
+    trim: trimParts.join(' · '),
+    icon: pickFreeIcon(d),
+    factory0to100: null,
+    specs,
+    dataMode: 'free',
   };
 }
 
@@ -621,6 +671,8 @@ export default function App() {
   // Fahrzeug-Auswahl beim Setup (über die API Ninjas Cars API)
   const [setupName, setSetupName] = useState('');
   const [makeInput, setMakeInput] = useState('');
+  const [modelInput, setModelInput] = useState('');
+  const [freeResults, setFreeResults] = useState([]);
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [trims, setTrims] = useState([]);
@@ -679,6 +731,28 @@ export default function App() {
 
   useEffect(() => { userProfileRef.current = userProfile; }, [userProfile]);
   useEffect(() => { raceModeRef.current = raceMode; }, [raceMode]);
+
+  // --- Kostenloser Modus: direkte Suche über /v1/cars ---
+  const searchFreeCars = async () => {
+    const make = makeInput.trim();
+    const model = modelInput.trim();
+    if (!make && !model) { setSetupError('Bitte mindestens Marke oder Modell eingeben.'); return; }
+    setSetupError('');
+    setSetupLoading('models');
+    setFreeResults([]); setChosenCar(null);
+    try {
+      const data = await fetchCarsApi('cars', { make, model, limit: 30 });
+      if (!Array.isArray(data) || data.length === 0) {
+        setSetupError('Keine Treffer. Tipp: englische Schreibweise, z.B. Marke „toyota", Modell „corolla".');
+      } else {
+        setFreeResults(data);
+      }
+    } catch (e) {
+      setSetupError(e.message);
+    } finally {
+      setSetupLoading('');
+    }
+  };
 
   // --- Auto-Auswahl über die Cars API (3 Schritte: Marke -> Modell -> Trim) ---
   const loadModels = async () => {
@@ -1254,91 +1328,157 @@ export default function App() {
             />
           </div>
 
-          {/* Schritt 1: Marke */}
-          <div>
-            <label className="block text-sm text-slate-400 mb-2">1 · Automarke</label>
-            <div className="flex gap-2">
-              <input
-                value={makeInput}
-                onChange={(e) => setMakeInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') loadModels(); }}
-                type="text"
-                placeholder="z.B. Audi, BMW, Toyota"
-                className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
-              />
-              <button
-                onClick={loadModels}
-                disabled={!makeInput.trim() || setupLoading === 'models'}
-                className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50 flex items-center"
-              >
-                {setupLoading === 'models' ? <Loader2 className="animate-spin" size={18} /> : 'Suchen'}
-              </button>
-            </div>
-          </div>
+          {/* ===== Kostenloser Modus: direkte Suche nach Marke + Modell ===== */}
+          {CARS_API_MODE === 'free' && (
+            <>
+              <div className="bg-sky-500/10 border border-sky-500/30 rounded-lg p-2.5 text-[11px] text-sky-200">
+                Testmodus (kostenlose API): begrenzte Daten – kein Top-Speed/PS. Umschaltbar im Code.
+              </div>
+              <div>
+                <label className="block text-sm text-slate-400 mb-2">Marke & Modell (englisch)</label>
+                <div className="flex gap-2">
+                  <input
+                    value={makeInput}
+                    onChange={(e) => setMakeInput(e.target.value)}
+                    type="text"
+                    placeholder="toyota"
+                    className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                  />
+                  <input
+                    value={modelInput}
+                    onChange={(e) => setModelInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') searchFreeCars(); }}
+                    type="text"
+                    placeholder="corolla"
+                    className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                  />
+                  <button
+                    onClick={searchFreeCars}
+                    disabled={setupLoading === 'models' || (!makeInput.trim() && !modelInput.trim())}
+                    className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50 flex items-center"
+                  >
+                    {setupLoading === 'models' ? <Loader2 className="animate-spin" size={18} /> : 'Suchen'}
+                  </button>
+                </div>
+              </div>
 
-          {/* Schritt 2: Modell */}
-          {stepActive(2) && (
-            <div className="animate-in fade-in duration-300">
-              <label className="block text-sm text-slate-400 mb-2">2 · Modell</label>
-              <select
-                value={selectedModel}
-                onChange={(e) => loadTrims(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
-              >
-                <option value="">– Modell wählen –</option>
-                {models.map((m) => (<option key={m} value={m}>{m}</option>))}
-              </select>
-            </div>
+              {freeResults.length > 0 && (
+                <div className="space-y-2 max-h-64 overflow-y-auto animate-in fade-in duration-300">
+                  {freeResults.map((d, i) => {
+                    const car = buildFreeCarObject(d);
+                    const active = chosenCar && chosenCar.id === car.id;
+                    return (
+                      <button
+                        key={`${car.id}-${i}`}
+                        onClick={() => setChosenCar(car)}
+                        className={`w-full text-left rounded-lg p-3 border transition-colors ${
+                          active ? 'bg-orange-500/15 border-orange-500/60' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-2xl">{car.icon}</span>
+                          <div className="min-w-0">
+                            <p className="font-bold text-white capitalize truncate">{d.make} {d.model}</p>
+                            <p className="text-[11px] text-slate-400 truncate">
+                              {[d.year, d.displacement ? `${d.displacement} l` : null, d.cylinders ? `${d.cylinders} Zyl.` : null, FUEL_DE[d.fuel_type] || d.fuel_type].filter(Boolean).join(' · ')}
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
 
-          {/* Schritt 3: Trim/Ausstattung */}
-          {stepActive(3) && (
-            <div className="animate-in fade-in duration-300">
-              <label className="block text-sm text-slate-400 mb-2">3 · Ausstattung / Motorisierung</label>
-              <select
-                value={selectedTrim}
-                onChange={(e) => loadDetails(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
-              >
-                <option value="">– Variante wählen –</option>
-                {trims.map((t, i) => (
-                  <option key={`${t.trim}-${t.serie}-${i}`} value={i}>
-                    {t.trim}{t.serie ? ` · ${t.serie}` : ''}{t.generation ? ` · ${t.generation}` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* ===== Voller Modus: Marke -> Modell -> Trim ===== */}
+          {CARS_API_MODE === 'full' && (
+            <>
+              {/* Schritt 1: Marke */}
+              <div>
+                <label className="block text-sm text-slate-400 mb-2">1 · Automarke</label>
+                <div className="flex gap-2">
+                  <input
+                    value={makeInput}
+                    onChange={(e) => setMakeInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') loadModels(); }}
+                    type="text"
+                    placeholder="z.B. Audi, BMW, Toyota"
+                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                  />
+                  <button
+                    onClick={loadModels}
+                    disabled={!makeInput.trim() || setupLoading === 'models'}
+                    className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50 flex items-center"
+                  >
+                    {setupLoading === 'models' ? <Loader2 className="animate-spin" size={18} /> : 'Suchen'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Schritt 2: Modell */}
+              {stepActive(2) && (
+                <div className="animate-in fade-in duration-300">
+                  <label className="block text-sm text-slate-400 mb-2">2 · Modell</label>
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => loadTrims(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
+                  >
+                    <option value="">– Modell wählen –</option>
+                    {models.map((m) => (<option key={m} value={m}>{m}</option>))}
+                  </select>
+                </div>
+              )}
+
+              {/* Schritt 3: Trim/Ausstattung */}
+              {stepActive(3) && (
+                <div className="animate-in fade-in duration-300">
+                  <label className="block text-sm text-slate-400 mb-2">3 · Ausstattung / Motorisierung</label>
+                  <select
+                    value={selectedTrim}
+                    onChange={(e) => loadDetails(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
+                  >
+                    <option value="">– Variante wählen –</option>
+                    {trims.map((t, i) => (
+                      <option key={`${t.trim}-${t.serie}-${i}`} value={i}>
+                        {t.trim}{t.serie ? ` · ${t.serie}` : ''}{t.generation ? ` · ${t.generation}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {setupLoading === 'details' && (
+                <div className="flex items-center justify-center gap-2 text-slate-400 text-sm py-2">
+                  <Loader2 className="animate-spin" size={16} /> Fahrzeugdaten werden geladen…
+                </div>
+              )}
+            </>
           )}
 
-          {setupLoading === 'details' && (
-            <div className="flex items-center justify-center gap-2 text-slate-400 text-sm py-2">
-              <Loader2 className="animate-spin" size={16} /> Fahrzeugdaten werden geladen…
-            </div>
-          )}
-
-          {/* Vorschau des gewählten Autos */}
+          {/* Vorschau des gewählten Autos (beide Modi) */}
           {chosenCar && (
             <div className="bg-slate-800 border border-orange-500/40 rounded-xl p-4 animate-in fade-in duration-300">
               <div className="flex items-center gap-3 mb-3">
                 <span className="text-4xl">{chosenCar.icon}</span>
-                <div>
-                  <p className="font-bold text-white leading-tight">{chosenCar.make} {chosenCar.model}</p>
-                  <p className="text-xs text-slate-400">{chosenCar.trim}</p>
+                <div className="min-w-0">
+                  <p className="font-bold text-white leading-tight capitalize">{chosenCar.make} {chosenCar.model}</p>
+                  <p className="text-xs text-slate-400 truncate">{chosenCar.trim || '–'}</p>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-slate-900 rounded-lg p-2">
-                  <p className="text-[10px] text-slate-500 uppercase">Top</p>
-                  <p className="text-sm font-bold">{chosenCar.specs['Max speed'] || '–'}</p>
-                </div>
-                <div className="bg-slate-900 rounded-lg p-2">
-                  <p className="text-[10px] text-slate-500 uppercase">Leistung</p>
-                  <p className="text-sm font-bold">{chosenCar.specs['Engine power'] || '–'}</p>
-                </div>
-                <div className="bg-slate-900 rounded-lg p-2">
-                  <p className="text-[10px] text-slate-500 uppercase">0–100</p>
-                  <p className="text-sm font-bold">{chosenCar.specs['Acceleration (0-100 km/h)'] || '–'}</p>
-                </div>
+                {(chosenCar.dataMode === 'free'
+                  ? [['Klasse', chosenCar.specs['Klasse']], ['Kraftstoff', chosenCar.specs['Kraftstoff']], ['Hubraum', chosenCar.specs['Hubraum']]]
+                  : [['Top', chosenCar.specs['Max speed']], ['Leistung', chosenCar.specs['Engine power']], ['0–100', chosenCar.specs['Acceleration (0-100 km/h)']]]
+                ).map(([label, val]) => (
+                  <div key={label} className="bg-slate-900 rounded-lg p-2">
+                    <p className="text-[10px] text-slate-500 uppercase">{label}</p>
+                    <p className="text-sm font-bold capitalize">{val || '–'}</p>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -1841,34 +1981,55 @@ export default function App() {
                   <p className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
                     <Gauge size={16} className="text-orange-500" /> Fahrzeugdaten
                   </p>
-                  <div className="grid grid-cols-2 gap-2 mb-3">
-                    {SPEC_HIGHLIGHTS.filter(([k]) => userProfile.car.specs[k]).map(([k, label]) => (
-                      <div key={k} className="bg-slate-800 rounded-lg p-3">
-                        <p className="text-[10px] text-slate-500 uppercase tracking-wider">{label}</p>
-                        <p className="text-sm font-bold text-white">{userProfile.car.specs[k]}</p>
-                      </div>
-                    ))}
-                  </div>
 
-                  {showAllSpecs && (
-                    <div className="bg-slate-800/60 rounded-lg divide-y divide-slate-700/50 mb-3 animate-in fade-in duration-200">
-                      {Object.keys(SPEC_LABELS)
-                        .filter((k) => userProfile.car.specs[k] != null)
-                        .map((k) => (
+                  {userProfile.car.dataMode === 'free' ? (
+                    // Kostenloser Modus: einfache Liste aller vorhandenen Werte
+                    <>
+                      <div className="bg-slate-800/60 rounded-lg divide-y divide-slate-700/50 mb-2">
+                        {Object.entries(userProfile.car.specs).map(([k, v]) => (
                           <div key={k} className="flex justify-between gap-3 px-3 py-2 text-sm">
-                            <span className="text-slate-400">{SPEC_LABELS[k]}</span>
-                            <span className="text-white text-right font-medium">{userProfile.car.specs[k]}</span>
+                            <span className="text-slate-400">{k}</span>
+                            <span className="text-white text-right font-medium capitalize">{v}</span>
                           </div>
                         ))}
-                    </div>
-                  )}
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Testmodus: eingeschränkte Daten (kostenlose API). Höchstgeschwindigkeit, Leistung und Motordetails gibt es im vollen Modus.
+                      </p>
+                    </>
+                  ) : (
+                    // Voller Modus: Highlights + ausklappbare Vollliste
+                    <>
+                      <div className="grid grid-cols-2 gap-2 mb-3">
+                        {SPEC_HIGHLIGHTS.filter(([k]) => userProfile.car.specs[k]).map(([k, label]) => (
+                          <div key={k} className="bg-slate-800 rounded-lg p-3">
+                            <p className="text-[10px] text-slate-500 uppercase tracking-wider">{label}</p>
+                            <p className="text-sm font-bold text-white">{userProfile.car.specs[k]}</p>
+                          </div>
+                        ))}
+                      </div>
 
-                  <button
-                    onClick={() => setShowAllSpecs((v) => !v)}
-                    className="w-full py-2 rounded-lg text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300"
-                  >
-                    {showAllSpecs ? 'Weniger anzeigen' : 'Alle technischen Daten anzeigen'}
-                  </button>
+                      {showAllSpecs && (
+                        <div className="bg-slate-800/60 rounded-lg divide-y divide-slate-700/50 mb-3 animate-in fade-in duration-200">
+                          {Object.keys(SPEC_LABELS)
+                            .filter((k) => userProfile.car.specs[k] != null)
+                            .map((k) => (
+                              <div key={k} className="flex justify-between gap-3 px-3 py-2 text-sm">
+                                <span className="text-slate-400">{SPEC_LABELS[k]}</span>
+                                <span className="text-white text-right font-medium">{userProfile.car.specs[k]}</span>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() => setShowAllSpecs((v) => !v)}
+                        className="w-full py-2 rounded-lg text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300"
+                      >
+                        {showAllSpecs ? 'Weniger anzeigen' : 'Alle technischen Daten anzeigen'}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 
