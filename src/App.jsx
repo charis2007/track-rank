@@ -31,11 +31,9 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'track-rank-v2';
 
-// KI-Backend (eigene Cloud Function, hält den Schlüssel serverseitig)
-const AI_BACKEND_URL = '/api/aiCoach';
 
-// Cars-API-Backend (Proxy zu API Ninjas, hält den Schlüssel serverseitig)
-const CARS_BACKEND_URL = '/api/cars';
+const AI_BACKEND_URL = 'https://DEIN-PROJEKT.vercel.app/api/aiCoach';
+const CARS_BACKEND_URL = 'https://DEIN-PROJEKT.vercel.app/api/cars';
 
 // Ruft einen Cars-API-Endpunkt über das eigene Backend auf
 async function fetchCarsApi(endpoint, params = {}) {

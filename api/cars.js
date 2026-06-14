@@ -1,13 +1,10 @@
-// Vercel Serverless Function: Proxy für die API Ninjas Cars API.
-// Liegt im echten Projekt unter:  api/cars.js
-// Hält den geheimen Schlüssel serverseitig (NIE im Browser!).
-//
-// Setze in Vercel unter Settings -> Environment Variables:
-//   API_NINJAS_KEY = dein_api_ninjas_schluessel
-//
-// Aufruf vom Frontend:  /api/cars?endpoint=carmodels&make=Audi
-
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+if (req.method === 'OPTIONS') {
+  res.status(204).end();
+  return;
+}
   const KEY = process.env.API_NINJAS_KEY;
   if (!KEY) {
     return res.status(500).json({ error: 'API_NINJAS_KEY ist nicht gesetzt (Vercel Env-Var).' });
