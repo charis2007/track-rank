@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Track Rank</string>
+    <string name="title_activity_main">Track Rank</string>
+    <string name="package_name">com.charis.trackrank</string>
+    <string name="custom_url_scheme">com.charis.trackrank</string>
+</resources>
