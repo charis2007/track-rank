@@ -985,7 +985,7 @@ function AppInner() {
   const [activeRoomId, setActiveRoomId] = useState(null);
   const [activeRoom, setActiveRoom] = useState(null);
   const [roomParticipants, setRoomParticipants] = useState([]);
-  const [newRoomName, setNewRoomName] = useState('');
+  const [confirmDeleteRoom, setConfirmDeleteRoom] = useState(false);
   const [chatView, setChatView] = useState('friends'); // 'friends' | 'rooms' | 'room'
   const call = useGroupCall(activeRoomId, user, userProfile?.username || '');
   const [isFetchingTuning, setIsFetchingTuning] = useState(false);
@@ -1292,8 +1292,8 @@ function AppInner() {
 
   // =================== Gruppenräume ===================
   const createRoom = async () => {
-    const name = newRoomName.trim() || `${userProfile.username}s Raum`;
     if (!user || !userProfile) return;
+    const name = `${userProfile.username}s Raum`;
     try {
       const ref = await addDoc(groupchatsCol(), {
         name,
@@ -1303,7 +1303,6 @@ function AppInner() {
         members: { [user.uid]: userProfile.username },
         createdAt: serverTimestamp(),
       });
-      setNewRoomName('');
       setActiveRoomId(ref.id);
       setChatView('room');
     } catch (e) { console.error(e); }
@@ -1321,13 +1320,26 @@ function AppInner() {
     } catch (e) { console.error(e); }
   };
 
+  const deleteRoom = async () => {
+    if (!activeRoom || !user || activeRoom.hostId !== user.uid) return;
+    if (call.joined) await call.leave();
+    try {
+      await deleteDoc(groupchatRef(activeRoom.id));
+    } catch (e) { console.error(e); }
+    setConfirmDeleteRoom(false);
+    setActiveRoomId(null);
+    setChatView('rooms');
+  };
+
   const openRoom = (roomId) => {
+    setConfirmDeleteRoom(false);
     setActiveRoomId(roomId);
     setChatView('room');
   };
 
   const closeRoomView = async () => {
     if (call.joined) await call.leave();
+    setConfirmDeleteRoom(false);
     setActiveRoomId(null);
     setChatView('rooms');
   };
@@ -2594,18 +2606,10 @@ function AppInner() {
             {chatView === 'rooms' && (
               <>
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider">Neuen Gruppen-Call erstellen</p>
-                  <div className="flex gap-2">
-                    <input
-                      value={newRoomName}
-                      onChange={(e) => setNewRoomName(e.target.value)}
-                      placeholder="Raumname (optional)"
-                      className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
-                    />
-                    <button onClick={createRoom} className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white flex items-center gap-1">
-                      <Plus size={18} /> Erstellen
-                    </button>
-                  </div>
+                  <p className="text-sm text-slate-400 font-bold uppercase tracking-wider">Neuer Gruppen-Call</p>
+                  <button onClick={createRoom} className="w-full py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white flex items-center justify-center gap-2">
+                    <Plus size={18} /> Raum erstellen & Freunde einladen
+                  </button>
                 </div>
 
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
@@ -2718,7 +2722,38 @@ function AppInner() {
                 <p className="text-[11px] text-slate-600 text-center">
                   Sprachübertragung per WebRTC. Bei Verbindungsproblemen hilft oft ein anderes WLAN/Netz.
                 </p>
+
+                {/* Raum löschen (nur Host) */}
+                {activeRoom.hostId === user.uid && (
+                  <div className="bg-slate-900 border border-red-500/20 rounded-2xl p-4">
+                    {!confirmDeleteRoom ? (
+                      <button
+                        onClick={() => setConfirmDeleteRoom(true)}
+                        className="w-full py-3 rounded-xl font-semibold text-red-400 bg-red-500/10 hover:bg-red-500/20 flex items-center justify-center gap-2"
+                      >
+                        <X size={18} /> Raum löschen
+                      </button>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-sm text-slate-300 text-center">Raum „{activeRoom.name}" wirklich löschen? Das beendet den Call für alle.</p>
+                        <div className="flex gap-2">
+                          <button onClick={deleteRoom} className="flex-1 py-3 rounded-xl font-bold bg-red-500 hover:bg-red-600 text-white">Ja, löschen</button>
+                          <button onClick={() => setConfirmDeleteRoom(false)} className="flex-1 py-3 rounded-xl font-semibold bg-slate-700 hover:bg-slate-600 text-white">Abbrechen</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
+            )}
+
+            {chatView === 'room' && !activeRoom && (
+              <div className="text-center space-y-4 py-10">
+                <p className="text-slate-400">Dieser Raum ist nicht mehr verfügbar.</p>
+                <button onClick={closeRoomView} className="px-5 py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white">
+                  Zurück zu den Räumen
+                </button>
+              </div>
             )}
           </div>
         )}
