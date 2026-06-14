@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 
 
+
 // --- Firebase: in der echten App durch eigene Werte ersetzen ---
 const firebaseConfig =
    {
@@ -931,7 +932,7 @@ function useGroupCall(roomId, user, username) {
   return { joined, joining, muted, participants: remoteIds, error, join, leave, toggleMute };
 }
 
-export default function App() {
+function AppInner() {
   // Auth & Profil
   const [user, setUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
@@ -963,7 +964,6 @@ export default function App() {
   const [topSpeed, setTopSpeed] = useState(0);
   const [zeroToHundred, setZeroToHundred] = useState(null);
   const tracker = useGpsTracker();
-  const call = useGroupCall(activeRoomId, user, userProfile?.username || '');
   const launchRef = useRef(null);
   const topRef = useRef(0);
   const zeroRecordedRef = useRef(false);
@@ -987,6 +987,7 @@ export default function App() {
   const [roomParticipants, setRoomParticipants] = useState([]);
   const [newRoomName, setNewRoomName] = useState('');
   const [chatView, setChatView] = useState('friends'); // 'friends' | 'rooms' | 'room'
+  const call = useGroupCall(activeRoomId, user, userProfile?.username || '');
   const [isFetchingTuning, setIsFetchingTuning] = useState(false);
 
   // Renn-Modus
@@ -2745,5 +2746,32 @@ export default function App() {
         </div>
       </nav>
     </div>
+  );
+}
+
+// Fehler-Fänger: zeigt Laufzeitfehler am Bildschirm statt weißem Screen
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { console.error('App-Fehler:', err, info); }
+  render() {
+    if (this.state.err) {
+      const e = this.state.err;
+      return (
+        <div style={{ minHeight: '100vh', background: '#020617', color: '#fca5a5', padding: '24px', fontFamily: 'monospace', fontSize: '13px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+          <div style={{ color: '#f97316', fontWeight: 'bold', fontSize: '16px', marginBottom: '12px' }}>⚠️ App-Fehler abgefangen:</div>
+          {String((e && e.stack) || (e && e.message) || e)}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
   );
 }
