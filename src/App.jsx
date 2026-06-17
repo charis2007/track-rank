@@ -35,7 +35,7 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'track-rank-v2';
 // '/api/...' funktionieren dort NICHT. Trage hier deine echte Vercel-URL ein
 // (ohne Slash am Ende), z.B. 'https://track-rank.vercel.app'.
 // Im Browser/lokal kannst du auch '' (leer) lassen, dann werden relative Pfade genutzt.
-const BACKEND_BASE = 'https://vercel.com/charis-projects3/track-rank/5P2upUtuRxx8SzsuiEvkAUJxBCHG';
+const BACKEND_BASE = 'https://track-rank.vercel.app';
 
 // KI-Backend (eigene Cloud Function, hält den Schlüssel serverseitig)
 const AI_BACKEND_URL = `${BACKEND_BASE}/api/aiCoach`;
