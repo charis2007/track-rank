@@ -17,7 +17,6 @@ import {
 // --- Firebase: in der echten App durch eigene Werte ersetzen ---
 const firebaseConfig =
    {
-        // TODO: Eigene Werte aus der Firebase Console eintragen:
         apiKey: "AIzaSyAkwVHsxUnzw4PF2eMK6a-JT17oLauCtyI",
         authDomain: "track-rank-b7568.firebaseapp.com",
         projectId: "track-rank-b7568",
@@ -31,9 +30,18 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'track-rank-v2';
 
+// >>> WICHTIG FÜR DIE HANDY-APP <<<
+// In der gepackten App gibt es keinen lokalen Server. Relative Pfade wie
+// '/api/...' funktionieren dort NICHT. Trage hier deine echte Vercel-URL ein
+// (ohne Slash am Ende), z.B. 'https://track-rank.vercel.app'.
+// Im Browser/lokal kannst du auch '' (leer) lassen, dann werden relative Pfade genutzt.
+const BACKEND_BASE = 'https://track-rank.vercel.app';
 
-const AI_BACKEND_URL = 'https://DEIN-PROJEKT.vercel.app/api/aiCoach';
-const CARS_BACKEND_URL = 'https://DEIN-PROJEKT.vercel.app/api/cars';
+// KI-Backend (eigene Cloud Function, hält den Schlüssel serverseitig)
+const AI_BACKEND_URL = `${BACKEND_BASE}/api/aiCoach`;
+
+// Cars-API-Backend (Proxy zu API Ninjas, hält den Schlüssel serverseitig)
+const CARS_BACKEND_URL = `${BACKEND_BASE}/api/cars`;
 
 // Ruft einen Cars-API-Endpunkt über das eigene Backend auf
 async function fetchCarsApi(endpoint, params = {}) {
@@ -683,6 +691,28 @@ function useGpsTracker() {
 }
 
 // --- Kleine Präsentationskomponenten ---
+function TuningGauge({ score, loading }) {
+  const r = 54;
+  const circ = 2 * Math.PI * r;
+  const pct = score ? Math.max(0, Math.min(100, score)) / 100 : 0;
+  const dash = circ * pct;
+  const color = !score ? '#475569' : score >= 75 ? '#22c55e' : score >= 45 ? '#f97316' : '#ef4444';
+  return (
+    <svg viewBox="0 0 140 140" className="w-44 h-44 mx-auto">
+      <circle cx="70" cy="70" r={r} fill="none" stroke="#1e293b" strokeWidth="13" />
+      <circle
+        cx="70" cy="70" r={r} fill="none" stroke={color} strokeWidth="13" strokeLinecap="round"
+        strokeDasharray={`${dash} ${circ}`} transform="rotate(-90 70 70)"
+        style={{ transition: 'stroke-dasharray 0.7s ease, stroke 0.4s ease' }}
+      />
+      <text x="70" y="68" textAnchor="middle" fontSize="38" fontWeight="bold" fill="#ffffff">
+        {loading ? '…' : (score ?? '–')}
+      </text>
+      <text x="70" y="90" textAnchor="middle" fontSize="12" fill="#94a3b8">von 100</text>
+    </svg>
+  );
+}
+
 function TrafficLight({ phase }) {
   const lamp = (active, color) =>
     `w-16 h-16 rounded-full transition-all duration-150 ${
@@ -970,6 +1000,8 @@ function AppInner() {
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [tuningTips, setTuningTips] = useState(null);
+  const [tuningScore, setTuningScore] = useState(null);
+  const [isScoring, setIsScoring] = useState(false);
   const [showAllSpecs, setShowAllSpecs] = useState(false);
 
   // Freunde & Gruppenchat
@@ -1007,6 +1039,9 @@ function AppInner() {
   const finishRef = useRef(false);
   const raceMovedRef = useRef(false);
   const raceTargetRef = useRef(500);
+  const raceStartedRef = useRef(false);   // false im Countdown, true ab Grün
+  const distAtGreenRef = useRef(0);        // gefahrene Strecke im Moment von Grün
+  const falseStartRef = useRef(false);     // true bei Frühstart
   const raceModeRef = useRef('menu');
   const onSampleRaceRef = useRef(null);
   const pointsAwardedRef = useRef(false);
@@ -1382,16 +1417,37 @@ function AppInner() {
     return () => clearInterval(id);
   }, [localPhase]);
 
+  // --- Bei echtem GPS schon im Countdown tracken (Fehlstart-Erkennung + GPS-Warmup) ---
+  useEffect(() => {
+    if (localPhase === 'countdown' && !useSimRef.current) {
+      raceStartedRef.current = false;
+      falseStartRef.current = false;
+      finishRef.current = false;
+      raceMovedRef.current = false;
+      distAtGreenRef.current = 0;
+      tracker.start(onSampleRaceRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localPhase]);
+
   // --- Bei Grün automatisch starten ---
   useEffect(() => {
     if (localPhase !== 'countdown' || greenLocalEpochRef.current == null) return;
     if (nowTick >= greenLocalEpochRef.current) {
+      if (falseStartRef.current) return; // schon Fehlstart -> nicht mehr starten
       finishRef.current = false;
       raceMovedRef.current = false;
+      raceStartedRef.current = true;
       raceTargetRef.current = raceMode === 'lobby' ? (race?.distance || selectedDistance) : selectedDistance;
+      if (useSimRef.current) {
+        // Simulation startet erst JETZT (bei Grün) – kein Fehlstart möglich
+        distAtGreenRef.current = 0;
+        tracker.startSim(onSampleRaceRef.current);
+      } else {
+        // Echtes GPS läuft schon: Strecke ab Grün als Basislinie merken
+        distAtGreenRef.current = tracker.distanceM;
+      }
       setLocalPhase('racing');
-      // Simulation oder echtes GPS?
-      (useSimRef.current ? tracker.startSim : tracker.start)(onSampleRaceRef.current);
       if (raceMode === 'lobby' && isHost && raceId) {
         updateDoc(raceRef(raceId), { status: 'racing' }).catch(() => {});
       }
@@ -1476,6 +1532,26 @@ function AppInner() {
       setTuningTips('Fehler beim Abrufen der Tuning-Tipps. Probier es später nochmal!');
     } finally {
       setIsFetchingTuning(false);
+    }
+  };
+
+  const handleTuningScore = async () => {
+    if (!userProfile) return;
+    setIsScoring(true);
+    const c = userProfile.car;
+    const specsText = c.specs
+      ? Object.entries(c.specs).slice(0, 14).map(([k, v]) => `${k}: ${v}`).join(', ')
+      : (c.trim || '');
+    const prompt = `Bewerte das TUNING-POTENZIAL des Autos ${c.make} ${c.model} ${c.trim || ''} auf einer Skala von 1 bis 100 (100 = extrem viel Potenzial für legale Leistungssteigerung). Berücksichtige Motorart, Aufladung, Antrieb, Plattform und die typische Tuning-Szene. Fahrzeugdaten: ${specsText}. Antworte AUSSCHLIESSLICH mit einer einzigen ganzen Zahl zwischen 1 und 100. Kein weiterer Text.`;
+    try {
+      const raw = await callAiBackend(prompt, 'Du bist ein Tuning-Experte. Du antwortest immer nur mit einer Zahl von 1 bis 100.');
+      const m = String(raw).match(/\d{1,3}/);
+      const n = m ? parseInt(m[0], 10) : NaN;
+      setTuningScore(Number.isFinite(n) ? Math.max(1, Math.min(100, n)) : null);
+    } catch {
+      setTuningScore(null);
+    } finally {
+      setIsScoring(false);
     }
   };
 
@@ -1585,27 +1661,61 @@ function AppInner() {
   };
 
   // =================== Renn-Logik ===================
+  const FALSE_START_KMH = 8; // schneller als GPS-Rauschen im Stand
   const onSampleRace = (s) => {
-    if (finishRef.current) return;
-    // Schranke gegen GPS-Sprünge: das Ziel erst werten, wenn das Auto sich
-    // tatsächlich bewegt hat (irgendwann > 8 km/h). Sonst könnte ein
-    // Positions-Sprung im Stand das Rennen sofort "beenden".
+    if (finishRef.current || falseStartRef.current) return;
+
+    // Noch im Countdown? Dann ist jede echte Bewegung ein Fehlstart.
+    // (Nur echte GPS-Modi tracken im Countdown; Sim startet erst bei Grün.)
+    if (!raceStartedRef.current) {
+      if (s.speedKmh > FALSE_START_KMH) {
+        falseStartRef.current = true;
+        handleFalseStart();
+      }
+      return;
+    }
+
+    // Rennen läuft: Strecke ab der Grün-Linie zählen
+    const dist = s.cumDist - distAtGreenRef.current;
+    const prevDist = s.prevCumDist - distAtGreenRef.current;
     if (s.speedKmh > 8) raceMovedRef.current = true;
-    if (raceMovedRef.current && s.cumDist >= raceTargetRef.current && s.prevCumDist < raceTargetRef.current) {
-      const frac = (raceTargetRef.current - s.prevCumDist) / (s.cumDist - s.prevCumDist || 1);
+    if (raceMovedRef.current && dist >= raceTargetRef.current && prevDist < raceTargetRef.current) {
+      const frac = (raceTargetRef.current - prevDist) / (dist - prevDist || 1);
       const crossT = s.prevTMs + frac * (s.tMs - s.prevTMs);
       const elapsed = (crossT - greenLocalEpochRef.current) / 1000;
       finishRef.current = true;
-      handleRaceFinish(elapsed, s.cumDist);
+      handleRaceFinish(elapsed, dist);
     } else if (raceModeRef.current === 'lobby') {
       const now = Date.now();
       if (now - lastProgressWrite.current > 300 && raceId) {
         lastProgressWrite.current = now;
-        updateDoc(raceRef(raceId), { [`results.${user.uid}.distance`]: Math.round(s.cumDist) }).catch(() => {});
+        updateDoc(raceRef(raceId), { [`results.${user.uid}.distance`]: Math.round(Math.max(0, dist)) }).catch(() => {});
       }
     }
   };
   onSampleRaceRef.current = onSampleRace;
+
+  // Frühstart: automatisch verloren
+  const handleFalseStart = () => {
+    tracker.stop();
+    setMyFinish(null);
+    setRaceOutcome('lose');
+    if (raceModeRef.current === 'lobby' && raceId && user) {
+      const oppId = isHost ? race?.guestId : race?.hostId;
+      const update = {
+        [`results.${user.uid}.finished`]: true,
+        [`results.${user.uid}.finishTime`]: 999999,
+        [`results.${user.uid}.falseStart`]: true,
+        status: 'finished',
+        finishedAt: serverTimestamp(),
+      };
+      if (oppId) update.winnerId = oppId; // Gegner gewinnt automatisch
+      updateDoc(raceRef(raceId), update).catch((e) => console.error(e));
+    } else {
+      // Solo / Sim: einfach verloren, keine Punkte
+      setLocalPhase('finished');
+    }
+  };
 
   const handleRaceFinish = (elapsed, dist) => {
     setMyFinish(elapsed);
@@ -1743,6 +1853,9 @@ function AppInner() {
     greenLocalEpochRef.current = null;
     finishRef.current = false;
     raceMovedRef.current = false;
+    raceStartedRef.current = false;
+    falseStartRef.current = false;
+    distAtGreenRef.current = 0;
     pointsAwardedRef.current = false;
     simGhostRef.current = null;
     setMyFinish(null);
@@ -2303,11 +2416,12 @@ function AppInner() {
                   'bg-slate-900 border-slate-800'
                 }`}>
                   <div className="text-6xl mb-3">
-                    {raceOutcome === 'win' ? '🏆' : raceOutcome === 'lose' ? '😤' : '🏁'}
+                    {falseStartRef.current ? '🚫' : raceOutcome === 'win' ? '🏆' : raceOutcome === 'lose' ? '😤' : '🏁'}
                   </div>
                   <h3 className="text-2xl font-black mb-1">
-                    {raceOutcome === 'win' ? 'Gewonnen!' : raceOutcome === 'lose' ? 'Verloren' : 'Lauf beendet'}
+                    {falseStartRef.current ? 'Fehlstart!' : raceOutcome === 'win' ? 'Gewonnen!' : raceOutcome === 'lose' ? 'Verloren' : 'Lauf beendet'}
                   </h3>
+                  {falseStartRef.current && <p className="text-red-300 text-sm">Zu früh losgefahren – automatisch verloren.</p>}
                   {myFinish != null && <p className="text-slate-300">Deine Zeit: <span className="font-bold tabular-nums">{myFinish.toFixed(2)}s</span></p>}
                   {raceMode === 'lobby' && oppResult?.finishTime != null && (
                     <p className="text-slate-400 text-sm">Gegner: {oppResult.finishTime.toFixed(2)}s</p>
@@ -2316,7 +2430,7 @@ function AppInner() {
                     <p className="text-slate-400 text-sm">Geist 👻: {ghost.time.toFixed(2)}s</p>
                   )}
                   {raceOutcome === 'win' && <p className="text-green-400 font-bold mt-2">+25 Punkte</p>}
-                  {raceOutcome === 'lose' && <p className="text-slate-400 font-bold mt-2">+8 Punkte</p>}
+                  {raceOutcome === 'lose' && !falseStartRef.current && <p className="text-slate-400 font-bold mt-2">+8 Punkte</p>}
                   {raceMode === 'sim' && (
                     <p className="text-[11px] text-sky-400/80 mt-2">Simulation – Punkte wurden trotzdem echt gutgeschrieben.</p>
                   )}
@@ -2511,6 +2625,25 @@ function AppInner() {
                   )}
                 </div>
               )}
+
+              {/* KI Tuning-Potenzial (Rundanzeige) */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-2 text-center">
+                <p className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-2">Tuning-Potenzial (KI)</p>
+                <TuningGauge score={tuningScore} loading={isScoring} />
+                <p className="text-xs text-slate-500 mt-1 mb-3">
+                  {tuningScore
+                    ? (tuningScore >= 75 ? 'Riesiges Potenzial für legale Leistungssteigerung.' : tuningScore >= 45 ? 'Solides Tuning-Potenzial.' : 'Eher begrenztes Potenzial.')
+                    : 'Lass die KI einschätzen, wie viel in deinem Auto steckt.'}
+                </p>
+                <button
+                  onClick={handleTuningScore}
+                  disabled={isScoring}
+                  className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-white flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-lg"
+                >
+                  {isScoring ? <Loader2 className="animate-spin" size={20} /> : <Gauge size={20} />}
+                  <span>{isScoring ? 'KI bewertet…' : (tuningScore ? 'Neu bewerten' : 'Potenzial berechnen')}</span>
+                </button>
+              </div>
 
               <div className="text-left mb-2">
                 <button

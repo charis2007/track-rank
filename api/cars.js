@@ -1,10 +1,12 @@
 export default async function handler(req, res) {
+  // CORS, damit die gepackte App (anderer Origin) zugreifen darf
   res.setHeader('Access-Control-Allow-Origin', '*');
-res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-if (req.method === 'OPTIONS') {
-  res.status(204).end();
-  return;
-}
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
   const KEY = process.env.API_NINJAS_KEY;
   if (!KEY) {
     return res.status(500).json({ error: 'API_NINJAS_KEY ist nicht gesetzt (Vercel Env-Var).' });
