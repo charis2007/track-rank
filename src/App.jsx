@@ -310,6 +310,31 @@ function haversine(lat1, lng1, lat2, lng2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// Fahrtrichtung (Bearing) von Punkt a nach b in Grad (0..360)
+function bearing(a, b) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const y = Math.sin(toRad(b.lng - a.lng)) * Math.cos(toRad(b.lat));
+  const x =
+    Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
+    Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(toRad(b.lng - a.lng));
+  return (Math.atan2(y, x) * 180) / Math.PI;
+}
+
+// Kürzeste vorzeichenbehaftete Winkeldifferenz (-180..180)
+function angleDiff(a, b) {
+  let d = b - a;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  return d;
+}
+
+// Zeit als mm:ss.s
+function fmtDuration(totalS) {
+  const m = Math.floor(totalS / 60);
+  const s = totalS - m * 60;
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+}
+
 // Schätzt die Differenz zwischen Server- und Geräte-Uhr (für die Ampel-Sync)
 async function estimateServerOffset(uid) {
   try {
@@ -397,6 +422,7 @@ function useGpsTracker() {
     const cur = { t: tMs, v: vRef.current, d: distRef.current };
     lastSample.current = cur;
     if (prev && onSampleRef.current) {
+      const g = lastGps.current;
       onSampleRef.current({
         tMs: cur.t,
         prevTMs: prev.t,
@@ -404,6 +430,9 @@ function useGpsTracker() {
         prevSpeedKmh: prev.v * 3.6,
         cumDist: cur.d,
         prevCumDist: prev.d,
+        lat: g ? g.lat : null,
+        lng: g ? g.lng : null,
+        heading: g && g.heading != null ? g.heading : null,
       });
     }
   };
@@ -528,7 +557,7 @@ function useGpsTracker() {
     } else if (z == null) {
       z = 0;
     }
-    lastGps.current = { lat: pos.coords.latitude, lng: pos.coords.longitude, t: tMs, speed: z };
+    lastGps.current = { lat: pos.coords.latitude, lng: pos.coords.longitude, t: tMs, speed: z, heading: pos.coords.heading };
 
     // Kalman-KORREKTUR (Doppler-Geschwindigkeit ist genauer als abgeleitete)
     const R = fromDoppler ? 0.35 : 1.5;
@@ -710,6 +739,50 @@ function TuningGauge({ score, loading }) {
       </text>
       <text x="70" y="90" textAnchor="middle" fontSize="12" fill="#94a3b8">von 100</text>
     </svg>
+  );
+}
+
+// Streckenverlauf: zeichnet den gefahrenen Pfad, eingefärbt nach Tempo
+function RouteMap({ path }) {
+  if (!path || path.length < 3) {
+    return <div className="text-slate-500 text-sm py-8 text-center">Strecke zu kurz für einen Verlauf – fahr eine Runde und stoppe dann.</div>;
+  }
+  const W = 320, H = 210, pad = 18;
+  const lats = path.map((p) => p.lat), lngs = path.map((p) => p.lng);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+  const cosLat = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180) || 1;
+  const spanLng = Math.max((maxLng - minLng) * cosLat, 1e-7);
+  const spanLat = Math.max(maxLat - minLat, 1e-7);
+  const scale = Math.min((W - 2 * pad) / spanLng, (H - 2 * pad) / spanLat);
+  const drawW = spanLng * scale, drawH = spanLat * scale;
+  const offX = (W - drawW) / 2, offY = (H - drawH) / 2;
+  const proj = (p) => ({
+    x: offX + (p.lng - minLng) * cosLat * scale,
+    y: H - offY - (p.lat - minLat) * scale, // Norden oben
+  });
+  const maxSpeed = Math.max(...path.map((p) => p.speed), 1);
+  const segs = [];
+  for (let i = 1; i < path.length; i++) {
+    const a = proj(path[i - 1]), b = proj(path[i]);
+    const t = Math.min(path[i].speed / maxSpeed, 1);
+    const hue = Math.round(t * 120); // rot (langsam) -> grün (schnell)
+    segs.push(<line key={i} x1={a.x.toFixed(1)} y1={a.y.toFixed(1)} x2={b.x.toFixed(1)} y2={b.y.toFixed(1)} stroke={`hsl(${hue} 85% 55%)`} strokeWidth="3.5" strokeLinecap="round" />);
+  }
+  const sp = proj(path[0]), ep = proj(path[path.length - 1]);
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        {segs}
+        <circle cx={sp.x.toFixed(1)} cy={sp.y.toFixed(1)} r="5.5" fill="#22c55e" stroke="#0f172a" strokeWidth="2" />
+        <circle cx={ep.x.toFixed(1)} cy={ep.y.toFixed(1)} r="5.5" fill="#ef4444" stroke="#0f172a" strokeWidth="2" />
+      </svg>
+      <div className="flex items-center justify-center gap-4 text-[11px] text-slate-400 mt-1">
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> Start</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> Ende</span>
+        <span className="flex items-center gap-1"><span className="w-6 h-1.5 rounded" style={{ background: 'linear-gradient(90deg,hsl(0 85% 55%),hsl(120 85% 55%))' }} /> langsam → schnell</span>
+      </div>
+    </div>
   );
 }
 
@@ -995,6 +1068,12 @@ function AppInner() {
   const launchRef = useRef(null);
   const topRef = useRef(0);
   const zeroRecordedRef = useRef(false);
+
+  // Streckenaufzeichnung (Kurven, Bremsungen, Top-Kurven-Speed, Pfad, Zeit)
+  const sessRef = useRef(null);
+  const liveTickRef = useRef(0);
+  const [sessionSummary, setSessionSummary] = useState(null);
+  const [liveTrack, setLiveTrack] = useState(null); // {corners,brakings,topCornerKmh,elapsedS}
 
   // KI
   const [aiAnalysis, setAiAnalysis] = useState(null);
@@ -1596,8 +1675,9 @@ function AppInner() {
     }
   };
 
-  // =================== 0-100 Tracker ===================
+  // =================== 0-100 Tracker + Streckenaufzeichnung ===================
   const onSampleTracker = (s) => {
+    recordSession(s);
     if (launchRef.current == null) {
       if (s.prevSpeedKmh < 3 && s.speedKmh >= 3) {
         const frac = (3 - s.prevSpeedKmh) / (s.speedKmh - s.prevSpeedKmh || 1);
@@ -1619,8 +1699,90 @@ function AppInner() {
       zeroRecordedRef.current = true;
       setZeroToHundred(z);
       saveRun(z, topRef.current);
-      tracker.stop();
+      // KEIN Auto-Stopp mehr: die Aufzeichnung läuft weiter, bis der Nutzer stoppt.
     }
+  };
+
+  // --- Streckenaufzeichnung ---
+  const startSession = () => {
+    sessRef.current = {
+      startMs: Date.now(),
+      path: [], lastPt: null, lastBearing: null,
+      turnAccum: 0, cornering: false, corners: 0, topCornerKmh: 0,
+      brakings: 0, braking: false, brakeT: null, brakeSpeed: null,
+      topSpeedKmh: 0,
+    };
+    liveTickRef.current = 0;
+    setSessionSummary(null);
+    setLiveTrack({ corners: 0, brakings: 0, topCornerKmh: 0, elapsedS: 0 });
+  };
+
+  const recordSession = (s) => {
+    const ss = sessRef.current;
+    if (!ss) return;
+    if (s.speedKmh > ss.topSpeedKmh) ss.topSpeedKmh = s.speedKmh;
+
+    // Bremsungen: Verzögerung über ein 300-ms-Fenster (robust gegen Rauschen)
+    if (ss.brakeT == null) { ss.brakeT = s.tMs; ss.brakeSpeed = s.speedKmh; }
+    else if (s.tMs - ss.brakeT >= 300) {
+      const dtS = (s.tMs - ss.brakeT) / 1000;
+      const decel = (ss.brakeSpeed - s.speedKmh) / dtS; // km/h pro Sekunde
+      if (!ss.braking && decel > 9 && s.speedKmh > 12) { ss.braking = true; ss.brakings++; }
+      else if (ss.braking && decel < 3) ss.braking = false;
+      ss.brakeT = s.tMs; ss.brakeSpeed = s.speedKmh;
+    }
+
+    // Pfad + Kurven (nur mit gültiger Position; Punkte ~10 m auseinander)
+    if (s.lat != null && s.lng != null) {
+      const cur = { lat: s.lat, lng: s.lng, speed: s.speedKmh, t: s.tMs };
+      if (!ss.lastPt) { ss.lastPt = cur; ss.path.push(cur); }
+      else if (haversine(ss.lastPt.lat, ss.lastPt.lng, cur.lat, cur.lng) > 10) {
+        const b = bearing(ss.lastPt, cur);
+        if (ss.lastBearing != null && s.speedKmh > 12) {
+          const delta = angleDiff(ss.lastBearing, b);
+          if (Math.abs(delta) > 8) {
+            ss.turnAccum += delta;
+            ss.cornering = true;
+            if (s.speedKmh > ss.topCornerKmh) ss.topCornerKmh = s.speedKmh;
+          } else {
+            if (ss.cornering && Math.abs(ss.turnAccum) > 35) ss.corners++;
+            ss.turnAccum = 0; ss.cornering = false;
+          }
+        }
+        ss.lastBearing = b;
+        ss.lastPt = cur;
+        ss.path.push(cur);
+      }
+    }
+
+    // Live-Anzeige max. ~3x/s aktualisieren (nicht bei jedem 60-Hz-Sample)
+    const now = Date.now();
+    if (now - liveTickRef.current > 350) {
+      liveTickRef.current = now;
+      setLiveTrack({
+        corners: ss.corners,
+        brakings: ss.brakings,
+        topCornerKmh: ss.topCornerKmh,
+        elapsedS: (now - ss.startMs) / 1000,
+      });
+    }
+  };
+
+  const finalizeSession = () => {
+    const ss = sessRef.current;
+    if (!ss) return;
+    if (ss.cornering && Math.abs(ss.turnAccum) > 35) ss.corners++;
+    setSessionSummary({
+      durationS: (Date.now() - ss.startMs) / 1000,
+      distanceM: tracker.distanceM,
+      topSpeedKmh: ss.topSpeedKmh,
+      topCornerKmh: ss.topCornerKmh,
+      corners: ss.corners,
+      brakings: ss.brakings,
+      path: ss.path,
+    });
+    sessRef.current = null;
+    setLiveTrack(null);
   };
 
   const resetTrackerMeasurement = () => {
@@ -1634,12 +1796,19 @@ function AppInner() {
 
   const startTrackerTab = () => {
     resetTrackerMeasurement();
+    startSession();
     tracker.start(onSampleTracker);
   };
 
   const startTrackerSim = () => {
     resetTrackerMeasurement();
+    startSession();
     tracker.startSim(onSampleTracker);
+  };
+
+  const stopTrackerTab = () => {
+    finalizeSession();
+    tracker.stop();
   };
 
   const saveRun = async (timeTaken, maxSpd) => {
@@ -2205,7 +2374,7 @@ function AppInner() {
             </div>
 
             <button
-              onClick={tracker.tracking ? tracker.stop : startTrackerTab}
+              onClick={tracker.tracking ? stopTrackerTab : startTrackerTab}
               className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all active:scale-95 ${
                 tracker.tracking ? 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/30' : 'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30'
               }`}
@@ -2222,6 +2391,69 @@ function AppInner() {
               >
                 <FlaskConical size={18} /> 🧪 Simulation (0-100 ohne GPS testen)
               </button>
+            )}
+
+            {/* Live-Werte der laufenden Aufzeichnung */}
+            {tracker.tracking && liveTrack && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> Aufzeichnung läuft
+                </p>
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <div>
+                    <div className="text-2xl font-bold tabular-nums text-white">{fmtDuration(liveTrack.elapsedS)}</div>
+                    <div className="text-[10px] text-slate-500 uppercase">Zeit</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold tabular-nums text-white">{liveTrack.corners}</div>
+                    <div className="text-[10px] text-slate-500 uppercase">Kurven</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold tabular-nums text-white">{liveTrack.brakings}</div>
+                    <div className="text-[10px] text-slate-500 uppercase">Bremsungen</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold tabular-nums text-white">{Math.round(liveTrack.topCornerKmh)}</div>
+                    <div className="text-[10px] text-slate-500 uppercase">Top-Kurve</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Streckenverlauf nach dem Stoppen */}
+            {sessionSummary && !tracker.tracking && (
+              <div className="bg-slate-900 border border-orange-500/30 rounded-2xl p-5 shadow-[0_0_15px_rgba(249,115,22,0.12)] animate-in slide-in-from-bottom-4">
+                <p className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <Activity size={16} className="text-orange-500" /> Streckenverlauf
+                </p>
+                <RouteMap path={sessionSummary.path} />
+                <div className="grid grid-cols-3 gap-3 mt-4">
+                  <div className="bg-slate-800 rounded-xl p-3 text-center">
+                    <div className="text-xl font-bold tabular-nums text-white">{fmtDuration(sessionSummary.durationS)}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-0.5">Zeit</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-3 text-center">
+                    <div className="text-xl font-bold tabular-nums text-white">{(sessionSummary.distanceM / 1000).toFixed(2)}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-0.5">km</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-3 text-center">
+                    <div className="text-xl font-bold tabular-nums text-white">{Math.round(sessionSummary.topSpeedKmh)}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-0.5">Top-Speed</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-3 text-center">
+                    <div className="text-xl font-bold tabular-nums text-white">{sessionSummary.corners}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-0.5">Kurven</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-3 text-center">
+                    <div className="text-xl font-bold tabular-nums text-white">{sessionSummary.brakings}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-0.5">Bremsungen</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-3 text-center">
+                    <div className="text-xl font-bold tabular-nums text-white">{Math.round(sessionSummary.topCornerKmh)}</div>
+                    <div className="text-[10px] text-slate-500 uppercase mt-0.5">Top-Kurve km/h</div>
+                  </div>
+                </div>
+              </div>
             )}
 
             {zeroToHundred && !tracker.tracking && (
