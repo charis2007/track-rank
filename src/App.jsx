@@ -185,6 +185,101 @@ function pickFreeIcon(d = {}) {
   return '🚗';
 }
 
+// =====================================================================
+//  CarIcon: generiertes, wiedererkennbares Auto-Emblem für ein Fahrzeug.
+//  - Silhouette passend zur Karosserieform
+//  - Signaturfarbe fest aus Marke+Modell abgeleitet (immer gleich)
+//  - Marken-Kürzel als Text
+//  Ersetzt überall das generische Emoji, damit man SEIN Auto erkennt.
+// =====================================================================
+function carCategory(car) {
+  const spec = car?.specs || {};
+  const fuel = String(spec['Engine type'] || spec['Fuel'] || spec['Kraftstoff'] || '').toLowerCase();
+  const body = String(spec['Body type'] || spec['Klasse'] || car?.trim || '').toLowerCase();
+  if (fuel.includes('electric') || fuel.includes('elektro')) return 'ev';
+  if (body.includes('suv') || body.includes('crossover') || body.includes('off-road') || body.includes('utility')) return 'suv';
+  if (body.includes('pickup') || body.includes('truck')) return 'truck';
+  if (body.includes('coupe') || body.includes('roadster') || body.includes('cabrio') || body.includes('convertible') || body.includes('two seater') || body.includes('sport')) return 'sport';
+  if (body.includes('wagon') || body.includes('avant') || body.includes('estate') || body.includes('kombi') || body.includes('van') || body.includes('touring')) return 'wagon';
+  return 'sedan';
+}
+
+function carHue(car) {
+  const s = `${car?.make || ''}|${car?.model || ''}`;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+function carShort(car) {
+  const m = String(car?.make || '').replace(/[^A-Za-z0-9]/g, '');
+  if (!m) return '';
+  return m.slice(0, 3).toUpperCase();
+}
+
+function carSilhouette(cat, color) {
+  const wheels = (
+    <>
+      <circle cx="33" cy="45" r="9" fill="rgba(0,0,0,0.45)" />
+      <circle cx="89" cy="45" r="9" fill="rgba(0,0,0,0.45)" />
+    </>
+  );
+  let body;
+  if (cat === 'suv') {
+    body = 'M8,45 L8,30 Q8,27 12,27 L30,27 L40,15 Q42,13 47,13 L82,13 Q88,13 92,17 L104,27 L112,28 Q116,28 116,32 L116,45 Z';
+  } else if (cat === 'truck') {
+    body = 'M8,45 L8,30 Q8,27 12,27 L34,27 L42,16 Q44,14 49,14 L66,14 L70,27 L116,27 L116,45 Z';
+  } else if (cat === 'sport') {
+    body = 'M6,44 L6,36 Q6,34 9,34 L30,33 L48,22 Q52,19 60,19 L80,20 Q88,21 94,27 L112,33 Q116,34 116,37 L116,44 Z';
+  } else if (cat === 'wagon') {
+    body = 'M7,45 L7,30 Q7,27 11,27 L40,16 Q42,14 47,14 L96,14 Q101,14 101,18 L101,30 L113,30 Q116,30 116,33 L116,45 Z';
+  } else if (cat === 'ev') {
+    body = 'M7,44 L7,33 Q7,31 10,31 L34,30 L46,18 Q48,16 53,16 L80,16 Q85,16 88,19 L100,30 L113,31 Q116,31 116,34 L116,44 Z';
+  } else {
+    body = 'M7,44 L7,32 Q7,30 10,30 L34,30 L45,17 Q47,15 52,15 L78,15 Q83,15 86,18 L98,30 L113,31 Q116,31 116,34 L116,44 Z';
+  }
+  return (
+    <>
+      {wheels}
+      <path d={body} fill={color} />
+      {cat === 'ev' && <path d="M58,21 L51,33 L58,33 L54,43 L69,29 L61,29 L65,21 Z" fill="rgba(255,255,255,0.9)" />}
+    </>
+  );
+}
+
+function CarIcon({ car, size = 40, className = '' }) {
+  if (!car || (!car.make && !car.model)) {
+    return <span className={className} style={{ fontSize: size * 0.8, lineHeight: 1 }}>{car?.icon || '🚗'}</span>;
+  }
+  const hue = carHue(car);
+  const cat = carCategory(car);
+  const short = carShort(car);
+  const showLabel = size >= 44 && short;
+  return (
+    <div
+      className={className}
+      title={`${car.make} ${car.model}`}
+      style={{
+        width: size, height: size, borderRadius: size * 0.24,
+        background: `linear-gradient(145deg, hsl(${hue} 60% 30%), hsl(${hue} 65% 15%))`,
+        border: `1.5px solid hsl(${hue} 70% 50%)`,
+        display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        overflow: 'hidden', flexShrink: 0,
+        boxShadow: `0 2px 8px hsl(${hue} 60% 8% / 0.5)`,
+      }}
+    >
+      <svg viewBox="0 0 120 56" width={size * 0.72} height={size * 0.34}>
+        {carSilhouette(cat, `hsl(${hue} 88% 72%)`)}
+      </svg>
+      {showLabel && (
+        <span style={{ fontSize: Math.max(7, size * 0.16), fontWeight: 800, color: '#fff', letterSpacing: '0.5px', lineHeight: 1, marginTop: size * 0.03 }}>
+          {short}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function buildFreeCarObject(d) {
   const liters = d.displacement != null ? `${d.displacement} l` : null;
   const specs = {};
@@ -800,13 +895,13 @@ function TrafficLight({ phase }) {
   );
 }
 
-function ProgressRow({ name, icon, dist, target, isYou, finishTime }) {
+function ProgressRow({ name, car, dist, target, isYou, finishTime }) {
   const pct = Math.min(100, (dist / target) * 100);
   return (
     <div className="space-y-1">
       <div className="flex justify-between items-center text-sm">
         <span className="flex items-center gap-2 font-semibold">
-          <span className="text-lg">{icon}</span>
+          <CarIcon car={car} size={26} />
           {name}
           {isYou && <span className="text-[9px] bg-orange-500 text-white px-1.5 py-0.5 rounded uppercase">Du</span>}
         </span>
@@ -2137,7 +2232,7 @@ function AppInner() {
                         }`}
                       >
                         <div className="flex items-center gap-2">
-                          <span className="text-2xl">{car.icon}</span>
+                          <CarIcon car={car} size={30} />
                           <div className="min-w-0">
                             <p className="font-bold text-white capitalize truncate">{d.make} {d.model}</p>
                             <p className="text-[11px] text-slate-400 truncate">
@@ -2224,7 +2319,7 @@ function AppInner() {
           {chosenCar && (
             <div className="bg-slate-800 border border-orange-500/40 rounded-xl p-4 animate-in fade-in duration-300">
               <div className="flex items-center gap-3 mb-3">
-                <span className="text-4xl">{chosenCar.icon}</span>
+                <CarIcon car={chosenCar} size={52} />
                 <div className="min-w-0">
                   <p className="font-bold text-white leading-tight capitalize">{chosenCar.make} {chosenCar.model}</p>
                   <p className="text-xs text-slate-400 truncate">{chosenCar.trim || '–'}</p>
@@ -2327,7 +2422,7 @@ function AppInner() {
                     : (userProfile.car.trim || '–')}
                 </p>
               </div>
-              <div className="text-5xl drop-shadow-lg">{userProfile.car.icon}</div>
+              <CarIcon car={userProfile.car} size={64} className="drop-shadow-lg" />
             </div>
 
             <div className="relative w-64 h-64 mx-auto flex flex-col items-center justify-center rounded-full border-8 border-slate-800 bg-slate-900 shadow-[0_0_50px_rgba(249,115,22,0.1)]">
@@ -2555,14 +2650,14 @@ function AppInner() {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-slate-900 border border-orange-500/40 rounded-2xl p-4 text-center">
-                    <div className="text-3xl mb-1">{race.hostCar?.icon}</div>
+                    <div className="flex justify-center mb-1"><CarIcon car={race.hostCar} size={40} /></div>
                     <p className="font-bold truncate">{race.hostName}</p>
                     <p className="text-[10px] text-orange-400 uppercase">Host</p>
                   </div>
                   <div className={`rounded-2xl p-4 text-center border ${race.guestId ? 'bg-slate-900 border-sky-500/40' : 'bg-slate-900/40 border-slate-800 border-dashed'}`}>
                     {race.guestId ? (
                       <>
-                        <div className="text-3xl mb-1">{race.guestCar?.icon}</div>
+                        <div className="flex justify-center mb-1"><CarIcon car={race.guestCar} size={40} /></div>
                         <p className="font-bold truncate">{race.guestName}</p>
                         <p className="text-[10px] text-sky-400 uppercase">Gegner</p>
                       </>
@@ -2624,9 +2719,9 @@ function AppInner() {
                   )}
                 </div>
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-                  <ProgressRow name={userProfile.username} icon={userProfile.car.icon} dist={tracker.distanceM} target={target} isYou finishTime={myFinish} />
+                  <ProgressRow name={userProfile.username} car={userProfile.car} dist={tracker.distanceM} target={target} isYou finishTime={myFinish} />
                   {raceMode === 'lobby' && oppId && (
-                    <ProgressRow name={oppName} icon={oppCar?.icon} dist={oppResult?.distance || 0} target={target} finishTime={oppResult?.finished ? oppResult.finishTime : null} />
+                    <ProgressRow name={oppName} car={oppCar} dist={oppResult?.distance || 0} target={target} finishTime={oppResult?.finished ? oppResult.finishTime : null} />
                   )}
                   {raceMode === 'sim' && ghost && (
                     <ProgressRow name={ghost.name} icon={ghost.icon} dist={ghostDist} target={target} finishTime={ghostFinished ? ghost.time : null} />
@@ -2727,7 +2822,7 @@ function AppInner() {
                             <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs ${
                               index === 0 ? 'bg-yellow-500 text-yellow-950' : index === 1 ? 'bg-slate-300 text-slate-800' : index === 2 ? 'bg-amber-700 text-amber-100' : 'bg-slate-800 text-slate-400'
                             }`}>{index + 1}</div>
-                            <div className="text-2xl">{run.car?.icon || '🚗'}</div>
+                            <CarIcon car={run.car} size={34} />
                             <div>
                               <div className="font-bold text-white flex items-center gap-2">
                                 {run.username}
@@ -2786,7 +2881,7 @@ function AppInner() {
               <User className="text-orange-500" /> Profil
             </h2>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
-              <div className="text-6xl mb-2">{userProfile.car.icon}</div>
+              <div className="flex justify-center mb-2"><CarIcon car={userProfile.car} size={84} /></div>
               <h3 className="text-2xl font-bold text-white mb-1">{userProfile.username}</h3>
               <p className="text-slate-400">{userProfile.car.make} {userProfile.car.model}</p>
               {userProfile.car.trim && <p className="text-xs text-slate-500 mb-4">{userProfile.car.trim}</p>}
