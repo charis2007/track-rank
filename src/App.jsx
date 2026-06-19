@@ -882,7 +882,7 @@ function ProgressRow({ name, car, dist, target, isYou, finishTime }) {
         <span className="flex items-center gap-2 font-semibold">
           <CarIcon car={car} size={26} />
           {name}
-          {isYou && <span className="text-[9px] bg-orange-500 text-white px-1.5 py-0.5 rounded uppercase">Du</span>}
+          {isYou && <span className="text-[9px] bg-blue-500 text-white px-1.5 py-0.5 rounded uppercase">Du</span>}
         </span>
         <span className="tabular-nums text-slate-400">
           {finishTime != null ? `${finishTime.toFixed(2)}s` : `${Math.round(dist)} m`}
@@ -890,7 +890,7 @@ function ProgressRow({ name, car, dist, target, isYou, finishTime }) {
       </div>
       <div className="h-3 bg-slate-800 rounded-full overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all duration-100 ${isYou ? 'bg-orange-500' : 'bg-sky-500'}`}
+          className={`h-full rounded-full transition-all duration-100 ${isYou ? 'bg-blue-500' : 'bg-sky-500'}`}
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -2139,7 +2139,7 @@ function AppInner() {
               type="text"
               placeholder="z.B. SpeedKing99"
               maxLength={20}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none"
             />
           </div>
 
@@ -2153,7 +2153,7 @@ function AppInner() {
               <select
                 value={chosenCar ? chosenCar.id : ''}
                 onChange={(e) => setChosenCar(DEMO_CARS.find((c) => c.id === e.target.value) || null)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none appearance-none"
               >
                 <option value="">– Auto wählen –</option>
                 {DEMO_CARS.map((c) => (
@@ -2177,7 +2177,7 @@ function AppInner() {
                     onChange={(e) => setMakeInput(e.target.value)}
                     type="text"
                     placeholder="toyota"
-                    className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                    className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none"
                   />
                   <input
                     value={modelInput}
@@ -2185,12 +2185,12 @@ function AppInner() {
                     onKeyDown={(e) => { if (e.key === 'Enter') searchFreeCars(); }}
                     type="text"
                     placeholder="corolla"
-                    className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                    className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none"
                   />
                   <button
                     onClick={searchFreeCars}
                     disabled={setupLoading === 'models' || (!makeInput.trim() && !modelInput.trim())}
-                    className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50 flex items-center"
+                    className="px-4 rounded-lg font-bold bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 flex items-center"
                   >
                     {setupLoading === 'models' ? <Loader2 className="animate-spin" size={18} /> : 'Suchen'}
                   </button>
@@ -2207,7 +2207,7 @@ function AppInner() {
                         key={`${car.id}-${i}`}
                         onClick={() => setChosenCar(car)}
                         className={`w-full text-left rounded-lg p-3 border transition-colors ${
-                          active ? 'bg-orange-500/15 border-orange-500/60' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'
+                          active ? 'bg-blue-500/15 border-blue-500/60' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'
                         }`}
                       >
                         <div className="flex items-center gap-2">
@@ -2240,12 +2240,12 @@ function AppInner() {
                     onKeyDown={(e) => { if (e.key === 'Enter') loadModels(); }}
                     type="text"
                     placeholder="z.B. Audi, BMW, Toyota"
-                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none"
                   />
                   <button
                     onClick={loadModels}
                     disabled={!makeInput.trim() || setupLoading === 'models'}
-                    className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50 flex items-center"
+                    className="px-4 rounded-lg font-bold bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 flex items-center"
                   >
                     {setupLoading === 'models' ? <Loader2 className="animate-spin" size={18} /> : 'Suchen'}
                   </button>
@@ -2259,7 +2259,7 @@ function AppInner() {
                   <select
                     value={selectedModel}
                     onChange={(e) => loadTrims(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none appearance-none"
                   >
                     <option value="">– Modell wählen –</option>
                     {models.map((m) => (<option key={m} value={m}>{m}</option>))}
@@ -2274,7 +2274,7 @@ function AppInner() {
                   <select
                     value={selectedTrim}
                     onChange={(e) => loadDetails(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none appearance-none"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none appearance-none"
                   >
                     <option value="">– Variante wählen –</option>
                     {trims.map((t, i) => (
@@ -2296,7 +2296,7 @@ function AppInner() {
 
           {/* Vorschau des gewählten Autos (beide Modi) */}
           {chosenCar && (
-            <div className="bg-slate-800 border border-orange-500/40 rounded-xl p-4 animate-in fade-in duration-300">
+            <div className="bg-slate-800 border border-blue-500/40 rounded-xl p-4 animate-in fade-in duration-300">
               <div className="flex items-center gap-3 mb-3">
                 <CarIcon car={chosenCar} size={52} />
                 <div className="min-w-0">
@@ -2325,7 +2325,7 @@ function AppInner() {
           <button
             onClick={handleProfileSetup}
             disabled={!chosenCar || !setupName.trim()}
-            className="w-full bg-orange-500 text-white font-bold rounded-lg p-3 hover:bg-orange-600 disabled:opacity-50"
+            className="w-full bg-blue-500 text-white font-bold rounded-lg p-3 hover:bg-blue-600 disabled:opacity-50"
           >
             Loslegen
           </button>
@@ -2370,9 +2370,9 @@ function AppInner() {
       <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 p-4 sticky top-0 z-10">
         <div className="max-w-md mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <FastForward className="text-orange-500" size={24} />
+            <FastForward className="text-blue-500" size={24} />
             <h1 className="text-xl font-black tracking-tight italic text-white">
-              Track <span className="text-orange-500">Rank</span>
+              Track <span className="text-blue-500">Rank</span>
             </h1>
           </div>
           <div className="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">
@@ -2391,7 +2391,7 @@ function AppInner() {
               <p>Nur auf abgesperrten Strecken nutzen. Rennen auf öffentlichen Straßen sind in Deutschland strafbar (§ 315d StGB).</p>
             </div>
 
-            <div className="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-800 rounded-2xl p-4 flex items-center justify-between shadow-lg">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between">
               <div>
                 <p className="text-xs text-slate-400 uppercase tracking-wider font-bold mb-1">Ausgewähltes Fahrzeug</p>
                 <h3 className="text-xl font-bold text-white">{userProfile.car.make} {userProfile.car.model}</h3>
@@ -2404,21 +2404,29 @@ function AppInner() {
               <CarIcon car={userProfile.car} size={64} className="drop-shadow-lg" />
             </div>
 
-            <div className="relative w-64 h-64 mx-auto flex flex-col items-center justify-center rounded-full border-8 border-slate-800 bg-slate-900 shadow-[0_0_50px_rgba(249,115,22,0.1)]">
+            <div className="relative w-64 h-64 mx-auto flex flex-col items-center justify-center">
+              <svg viewBox="0 0 280 280" className="absolute inset-0 w-full h-full -rotate-90">
+                <circle cx="140" cy="140" r="122" fill="none" stroke="#172033" strokeWidth="16" />
+                <circle
+                  cx="140" cy="140" r="122" fill="none" stroke="#3b82f6" strokeWidth="16" strokeLinecap="round"
+                  strokeDasharray={`${Math.min(1, (tracker.speedKmh || 0) / 260) * 766} 766`}
+                  style={{ transition: 'stroke-dasharray 0.2s linear' }}
+                />
+              </svg>
               <span className="text-7xl font-black tracking-tighter tabular-nums text-white">{Math.floor(tracker.speedKmh)}</span>
-              <span className="text-slate-400 font-semibold uppercase tracking-widest text-sm mt-1">km/h</span>
+              <span className="text-slate-500 font-semibold uppercase tracking-[0.2em] text-xs mt-1">km/h</span>
               {tracker.simulated && (
-                <span className="absolute top-8 text-[10px] text-sky-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                <span className="absolute top-10 text-[10px] text-sky-400 font-bold uppercase tracking-wider flex items-center gap-1">
                   <FlaskConical size={12} /> Simulation
                 </span>
               )}
               {tracker.tracking && !tracker.simulated && (
-                <span className={`absolute top-8 text-[10px] font-bold uppercase tracking-wider ${tracker.fusionActive ? 'text-green-400' : 'text-slate-500'}`}>
+                <span className={`absolute top-10 text-[10px] font-bold uppercase tracking-wider ${tracker.fusionActive ? 'text-green-400' : 'text-slate-500'}`}>
                   {tracker.fusionActive ? '⚡ Sensor-Fusion aktiv' : 'Nur GPS'}
                 </span>
               )}
               {tracker.tracking && !tracker.simulated && tracker.accuracyM != null && tracker.accuracyM > 20 && (
-                <span className="absolute bottom-6 text-[10px] text-yellow-400">GPS ungenau ({Math.round(tracker.accuracyM)} m)</span>
+                <span className="absolute bottom-9 text-[10px] text-yellow-400">GPS ungenau ({Math.round(tracker.accuracyM)} m)</span>
               )}
             </div>
 
@@ -2450,7 +2458,7 @@ function AppInner() {
             <button
               onClick={tracker.tracking ? stopTrackerTab : startTrackerTab}
               className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all active:scale-95 ${
-                tracker.tracking ? 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/30' : 'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30'
+                tracker.tracking ? 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/30' : 'bg-blue-500 hover:bg-blue-600 text-white shadow-lg shadow-blue-500/30'
               }`}
             >
               {tracker.tracking ? <Square size={20} /> : <Play fill="currentColor" size={20} />}
@@ -2496,9 +2504,9 @@ function AppInner() {
 
             {/* Streckenverlauf nach dem Stoppen */}
             {sessionSummary && !tracker.tracking && (
-              <div className="bg-slate-900 border border-orange-500/30 rounded-2xl p-5 shadow-[0_0_15px_rgba(249,115,22,0.12)] animate-in slide-in-from-bottom-4">
+              <div className="bg-slate-900 border border-blue-500/30 rounded-2xl p-5 shadow-[0_0_15px_rgba(59,130,246,0.12)] animate-in slide-in-from-bottom-4">
                 <p className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-3 flex items-center gap-2">
-                  <Activity size={16} className="text-orange-500" /> Streckenverlauf
+                  <Activity size={16} className="text-blue-500" /> Streckenverlauf
                 </p>
                 <RouteMap path={sessionSummary.path} />
                 <div className="grid grid-cols-3 gap-3 mt-4">
@@ -2552,7 +2560,7 @@ function AppInner() {
         {activeTab === 'race' && (
           <div className="space-y-5 animate-in fade-in duration-300">
             <h2 className="text-xl font-bold flex items-center gap-2">
-              <Swords className="text-orange-500" /> Drag Race
+              <Swords className="text-blue-500" /> Drag Race
             </h2>
 
             {/* --- Menü --- */}
@@ -2566,7 +2574,7 @@ function AppInner() {
                         key={d.m}
                         onClick={() => setSelectedDistance(d.m)}
                         className={`py-4 rounded-xl font-bold text-lg transition-colors ${
-                          selectedDistance === d.m ? 'bg-orange-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                          selectedDistance === d.m ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                         }`}
                       >
                         {d.label}
@@ -2577,7 +2585,7 @@ function AppInner() {
 
                 <button
                   onClick={createRace}
-                  className="w-full py-4 rounded-xl font-bold text-lg bg-orange-500 hover:bg-orange-600 text-white flex items-center justify-center gap-2 active:scale-95 transition-all"
+                  className="w-full py-4 rounded-xl font-bold text-lg bg-blue-500 hover:bg-blue-600 text-white flex items-center justify-center gap-2 active:scale-95 transition-all"
                 >
                   <Plus size={20} /> Online-Rennen erstellen
                 </button>
@@ -2590,7 +2598,7 @@ function AppInner() {
                       onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
                       maxLength={8}
                       placeholder="z.B. K7Q2"
-                      className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white font-mono tracking-widest text-center focus:border-orange-500 outline-none"
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white font-mono tracking-widest text-center focus:border-blue-500 outline-none"
                     />
                     <button onClick={joinRace} className="px-5 rounded-lg font-bold bg-sky-600 hover:bg-sky-500 text-white">
                       Beitreten
@@ -2623,15 +2631,15 @@ function AppInner() {
               <div className="space-y-5">
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
                   <p className="text-sm text-slate-400 mb-1">Renn-Code (an Gegner weitergeben)</p>
-                  <p className="text-5xl font-black font-mono tracking-[0.3em] text-orange-500 mb-3">{raceId}</p>
+                  <p className="text-5xl font-black font-mono tracking-[0.3em] text-blue-500 mb-3">{raceId}</p>
                   <p className="text-sm text-slate-400">Distanz: {DISTANCES.find((d) => d.m === race.distance)?.label}</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-slate-900 border border-orange-500/40 rounded-2xl p-4 text-center">
+                  <div className="bg-slate-900 border border-blue-500/40 rounded-2xl p-4 text-center">
                     <div className="flex justify-center mb-1"><CarIcon car={race.hostCar} size={40} /></div>
                     <p className="font-bold truncate">{race.hostName}</p>
-                    <p className="text-[10px] text-orange-400 uppercase">Host</p>
+                    <p className="text-[10px] text-blue-400 uppercase">Host</p>
                   </div>
                   <div className={`rounded-2xl p-4 text-center border ${race.guestId ? 'bg-slate-900 border-sky-500/40' : 'bg-slate-900/40 border-slate-800 border-dashed'}`}>
                     {race.guestId ? (
@@ -2741,7 +2749,7 @@ function AppInner() {
                     <p className="text-[11px] text-sky-400/80 mt-2">Simulation – Punkte wurden trotzdem echt gutgeschrieben.</p>
                   )}
                 </div>
-                <button onClick={() => resetRace(true)} className="w-full py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white">
+                <button onClick={() => resetRace(true)} className="w-full py-3 rounded-xl font-bold bg-blue-500 hover:bg-blue-600 text-white">
                   Zurück zum Menü
                 </button>
               </div>
@@ -2759,13 +2767,13 @@ function AppInner() {
             <div className="flex gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800">
               <button
                 onClick={() => setBoardMode('times')}
-                className={`flex-1 py-2 rounded-lg text-sm font-semibold ${boardMode === 'times' ? 'bg-orange-500 text-white' : 'text-slate-400'}`}
+                className={`flex-1 py-2 rounded-lg text-sm font-semibold ${boardMode === 'times' ? 'bg-blue-500 text-white' : 'text-slate-400'}`}
               >
                 Bestzeiten (0-100)
               </button>
               <button
                 onClick={() => setBoardMode('points')}
-                className={`flex-1 py-2 rounded-lg text-sm font-semibold ${boardMode === 'points' ? 'bg-orange-500 text-white' : 'text-slate-400'}`}
+                className={`flex-1 py-2 rounded-lg text-sm font-semibold ${boardMode === 'points' ? 'bg-blue-500 text-white' : 'text-slate-400'}`}
               >
                 Renn-Punkte
               </button>
@@ -2783,7 +2791,7 @@ function AppInner() {
                       key={key}
                       onClick={() => setLeaderboardFilter(key)}
                       className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-colors flex items-center gap-1 ${
-                        leaderboardFilter === key ? 'bg-orange-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        leaderboardFilter === key ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                       }`}
                     >
                       {key === 'similar' && <Filter size={14} />} {label}
@@ -2796,7 +2804,7 @@ function AppInner() {
                   ) : (
                     <ul className="divide-y divide-slate-800/50">
                       {filteredLeaderboard.map((run, index) => (
-                        <li key={run.id} className={`p-4 flex items-center justify-between ${run.userId === user.uid ? 'bg-orange-500/5' : ''}`}>
+                        <li key={run.id} className={`p-4 flex items-center justify-between ${run.userId === user.uid ? 'bg-blue-500/5' : ''}`}>
                           <div className="flex items-center gap-3">
                             <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs ${
                               index === 0 ? 'bg-yellow-500 text-yellow-950' : index === 1 ? 'bg-slate-300 text-slate-800' : index === 2 ? 'bg-amber-700 text-amber-100' : 'bg-slate-800 text-slate-400'
@@ -2805,7 +2813,7 @@ function AppInner() {
                             <div>
                               <div className="font-bold text-white flex items-center gap-2">
                                 {run.username}
-                                {run.userId === user.uid && <span className="text-[9px] bg-orange-500 text-white px-1.5 py-0.5 rounded uppercase">Du</span>}
+                                {run.userId === user.uid && <span className="text-[9px] bg-blue-500 text-white px-1.5 py-0.5 rounded uppercase">Du</span>}
                               </div>
                               <div className="text-[11px] text-slate-400">{run.car?.make} {run.car?.model}</div>
                             </div>
@@ -2828,7 +2836,7 @@ function AppInner() {
                     {pointsBoard.map((racer, index) => {
                       const rank = getRank(racer.points || 0);
                       return (
-                        <li key={racer.id} className={`p-4 flex items-center justify-between ${racer.id === user.uid ? 'bg-orange-500/5' : ''}`}>
+                        <li key={racer.id} className={`p-4 flex items-center justify-between ${racer.id === user.uid ? 'bg-blue-500/5' : ''}`}>
                           <div className="flex items-center gap-3">
                             <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs ${
                               index === 0 ? 'bg-yellow-500 text-yellow-950' : index === 1 ? 'bg-slate-300 text-slate-800' : index === 2 ? 'bg-amber-700 text-amber-100' : 'bg-slate-800 text-slate-400'
@@ -2837,12 +2845,12 @@ function AppInner() {
                             <div>
                               <div className="font-bold text-white flex items-center gap-2">
                                 {racer.username}
-                                {racer.id === user.uid && <span className="text-[9px] bg-orange-500 text-white px-1.5 py-0.5 rounded uppercase">Du</span>}
+                                {racer.id === user.uid && <span className="text-[9px] bg-blue-500 text-white px-1.5 py-0.5 rounded uppercase">Du</span>}
                               </div>
                               <div className="text-[11px] text-slate-400">{rank.name} · {racer.car?.make} {racer.car?.model}</div>
                             </div>
                           </div>
-                          <div className="font-black text-lg text-orange-400 tabular-nums">{racer.points || 0}</div>
+                          <div className="font-black text-lg text-blue-400 tabular-nums">{racer.points || 0}</div>
                         </li>
                       );
                     })}
@@ -2857,7 +2865,7 @@ function AppInner() {
         {activeTab === 'profile' && (
           <div className="space-y-4 animate-in fade-in duration-300">
             <h2 className="text-xl font-bold flex items-center gap-2 mb-6">
-              <User className="text-orange-500" /> Profil
+              <User className="text-blue-500" /> Profil
             </h2>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
               <div className="flex justify-center mb-2"><CarIcon car={userProfile.car} size={84} /></div>
@@ -2870,7 +2878,7 @@ function AppInner() {
                 <span className="text-3xl">{myRank.icon}</span>
                 <div className="text-left">
                   <p className="font-bold text-white flex items-center gap-1"><Crown size={16} className="text-yellow-500" /> {myRank.name}</p>
-                  <p className="text-sm text-orange-400 font-bold tabular-nums">{userProfile.points || 0} Punkte</p>
+                  <p className="text-sm text-blue-400 font-bold tabular-nums">{userProfile.points || 0} Punkte</p>
                 </div>
               </div>
 
@@ -2878,7 +2886,7 @@ function AppInner() {
               {userProfile.car.specs && Object.keys(userProfile.car.specs).length > 0 && (
                 <div className="text-left mb-5">
                   <p className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
-                    <Gauge size={16} className="text-orange-500" /> Fahrzeugdaten
+                    <Gauge size={16} className="text-blue-500" /> Fahrzeugdaten
                   </p>
 
                   {userProfile.car.dataMode === 'free' ? (
@@ -2944,7 +2952,7 @@ function AppInner() {
                 <button
                   onClick={handleTuningScore}
                   disabled={isScoring}
-                  className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-white flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-lg"
+                  className="w-full py-3 rounded-xl font-bold bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                 >
                   {isScoring ? <Loader2 className="animate-spin" size={20} /> : <Gauge size={20} />}
                   <span>{isScoring ? 'KI bewertet…' : (tuningScore ? 'Neu bewerten' : 'Potenzial berechnen')}</span>
@@ -2955,7 +2963,7 @@ function AppInner() {
                 <button
                   onClick={handleGetTuningTips}
                   disabled={isFetchingTuning}
-                  className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shadow-lg"
+                  className="w-full py-3 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                 >
                   {isFetchingTuning ? <Loader2 className="animate-spin" size={20} /> : <Sparkles size={20} />}
                   <span>{isFetchingTuning ? 'Tuning-Pläne werden erstellt...' : '✨ KI Tuning-Tipps für mein Auto'}</span>
@@ -2973,11 +2981,11 @@ function AppInner() {
             {chatView !== 'room' && (
               <>
                 <h2 className="text-xl font-bold flex items-center gap-2">
-                  <MessageCircle className="text-orange-500" /> Freunde & Chat
+                  <MessageCircle className="text-blue-500" /> Freunde & Chat
                 </h2>
                 <div className="flex gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800">
-                  <button onClick={() => setChatView('friends')} className={`flex-1 py-2 rounded-lg text-sm font-semibold ${chatView === 'friends' ? 'bg-orange-500 text-white' : 'text-slate-400'}`}>Freunde</button>
-                  <button onClick={() => setChatView('rooms')} className={`flex-1 py-2 rounded-lg text-sm font-semibold ${chatView === 'rooms' ? 'bg-orange-500 text-white' : 'text-slate-400'}`}>Gruppen-Calls</button>
+                  <button onClick={() => setChatView('friends')} className={`flex-1 py-2 rounded-lg text-sm font-semibold ${chatView === 'friends' ? 'bg-blue-500 text-white' : 'text-slate-400'}`}>Freunde</button>
+                  <button onClick={() => setChatView('rooms')} className={`flex-1 py-2 rounded-lg text-sm font-semibold ${chatView === 'rooms' ? 'bg-blue-500 text-white' : 'text-slate-400'}`}>Gruppen-Calls</button>
                 </div>
               </>
             )}
@@ -2993,9 +3001,9 @@ function AppInner() {
                       onChange={(e) => setFriendSearch(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') sendFriendRequest(); }}
                       placeholder="Benutzername suchen…"
-                      className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-orange-500 outline-none"
+                      className="flex-1 w-0 bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none"
                     />
-                    <button onClick={sendFriendRequest} disabled={searching || !friendSearch.trim()} className="px-4 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50 flex items-center">
+                    <button onClick={sendFriendRequest} disabled={searching || !friendSearch.trim()} className="px-4 rounded-lg font-bold bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 flex items-center">
                       {searching ? <Loader2 className="animate-spin" size={18} /> : <UserPlus size={18} />}
                     </button>
                   </div>
@@ -3003,8 +3011,8 @@ function AppInner() {
                 </div>
 
                 {incomingReqs.length > 0 && (
-                  <div className="bg-slate-900 border border-orange-500/30 rounded-2xl p-4 space-y-2">
-                    <p className="text-sm text-orange-400 font-bold uppercase tracking-wider">Anfragen ({incomingReqs.length})</p>
+                  <div className="bg-slate-900 border border-blue-500/30 rounded-2xl p-4 space-y-2">
+                    <p className="text-sm text-blue-400 font-bold uppercase tracking-wider">Anfragen ({incomingReqs.length})</p>
                     {incomingReqs.map((r) => (
                       <div key={r.id} className="flex items-center justify-between gap-2">
                         <span className="font-semibold">{r.fromName}</span>
@@ -3044,7 +3052,7 @@ function AppInner() {
               <>
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
                   <p className="text-sm text-slate-400 font-bold uppercase tracking-wider">Neuer Gruppen-Call</p>
-                  <button onClick={createRoom} className="w-full py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white flex items-center justify-center gap-2">
+                  <button onClick={createRoom} className="w-full py-3 rounded-xl font-bold bg-blue-500 hover:bg-blue-600 text-white flex items-center justify-center gap-2">
                     <Plus size={18} /> Raum erstellen & Freunde einladen
                   </button>
                 </div>
@@ -3062,7 +3070,7 @@ function AppInner() {
                               <p className="font-bold text-white">{r.name}</p>
                               <p className="text-[11px] text-slate-400">{(r.memberUids || []).length}/{MAX_GROUP_MEMBERS} Mitglieder · Host: {r.hostName}</p>
                             </div>
-                            <Phone size={18} className="text-orange-500" />
+                            <Phone size={18} className="text-blue-500" />
                           </button>
                         </li>
                       ))}
@@ -3143,7 +3151,7 @@ function AppInner() {
                           <button
                             onClick={() => inviteFriendToRoom(f)}
                             disabled={(activeRoom.memberUids || []).length >= MAX_GROUP_MEMBERS}
-                            className="px-3 py-1.5 rounded-lg text-sm font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40 flex items-center gap-1"
+                            className="px-3 py-1.5 rounded-lg text-sm font-bold bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-40 flex items-center gap-1"
                           >
                             <UserPlus size={14} /> Einladen
                           </button>
@@ -3187,7 +3195,7 @@ function AppInner() {
             {chatView === 'room' && !activeRoom && (
               <div className="text-center space-y-4 py-10">
                 <p className="text-slate-400">Dieser Raum ist nicht mehr verfügbar.</p>
-                <button onClick={closeRoomView} className="px-5 py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white">
+                <button onClick={closeRoomView} className="px-5 py-3 rounded-xl font-bold bg-blue-500 hover:bg-blue-600 text-white">
                   Zurück zu den Räumen
                 </button>
               </div>
@@ -3197,7 +3205,7 @@ function AppInner() {
       </main>
 
       {/* Navigation */}
-      <nav className="fixed bottom-0 w-full bg-slate-900/90 backdrop-blur-lg border-t border-slate-800 pb-safe">
+      <nav className="fixed bottom-0 w-full bg-slate-900/95 backdrop-blur-lg border-t border-slate-800/80 pb-safe">
         <div className="max-w-md mx-auto flex justify-between p-2 px-3">
           {[
             ['tracker', Activity, 'Track'],
@@ -3205,16 +3213,20 @@ function AppInner() {
             ['chat', MessageCircle, 'Chat'],
             ['leaderboard', Trophy, 'Ranks'],
             ['profile', User, 'Profil'],
-          ].map(([key, Icon, label]) => (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`flex flex-col items-center p-2 transition-colors ${activeTab === key ? 'text-orange-500' : 'text-slate-500'}`}
-            >
-              <Icon size={24} className="mb-1" />
-              <span className="text-[10px] font-bold uppercase tracking-wider">{label}</span>
-            </button>
-          ))}
+          ].map(([key, Icon, label]) => {
+            const active = activeTab === key;
+            return (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`flex flex-col items-center gap-1 px-2 pt-2 pb-1 transition-colors ${active ? 'text-blue-500' : 'text-slate-500'}`}
+              >
+                <Icon size={24} strokeWidth={active ? 2.5 : 2} />
+                <span className="text-[10px] font-bold uppercase tracking-wider">{label}</span>
+                <span className={`w-1.5 h-1.5 rounded-full transition-colors ${active ? 'bg-blue-500' : 'bg-transparent'}`} />
+              </button>
+            );
+          })}
         </div>
       </nav>
     </div>
