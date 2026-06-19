@@ -11,6 +11,8 @@ import {
   getDoc, getDocs, updateDoc, deleteDoc, increment, runTransaction,
   query, where, writeBatch, arrayUnion,
 } from 'firebase/firestore';
+// Auto-Icons (deine Strichzeichnungen, nach Typ). Datei carIcons.js daneben ablegen.
+import { CAR_ICONS } from './carIcons';
 
 
 
@@ -194,13 +196,20 @@ function pickFreeIcon(d = {}) {
 // =====================================================================
 function carCategory(car) {
   const spec = car?.specs || {};
-  const fuel = String(spec['Engine type'] || spec['Fuel'] || spec['Kraftstoff'] || '').toLowerCase();
+  const make = String(car?.make || '').toLowerCase();
   const body = String(spec['Body type'] || spec['Klasse'] || car?.trim || '').toLowerCase();
-  if (fuel.includes('electric') || fuel.includes('elektro')) return 'ev';
-  if (body.includes('suv') || body.includes('crossover') || body.includes('off-road') || body.includes('utility')) return 'suv';
-  if (body.includes('pickup') || body.includes('truck')) return 'truck';
-  if (body.includes('coupe') || body.includes('roadster') || body.includes('cabrio') || body.includes('convertible') || body.includes('two seater') || body.includes('sport')) return 'sport';
-  if (body.includes('wagon') || body.includes('avant') || body.includes('estate') || body.includes('kombi') || body.includes('van') || body.includes('touring')) return 'wagon';
+
+  if (/(rolls|bentley|maybach)/.test(make)) return 'luxury';
+  if (/(motorhome|camper|wohnmobil|caravan|\brv\b)/.test(body)) return 'camper';
+  if (/(pickup|pick-up|truck)/.test(body)) return 'truck';
+  if (/(van|minivan|mpv|transporter|kleinbus|\bbus\b)/.test(body)) return 'camper';
+  if (/(suv|crossover|off-road|offroad|gelände|jeep)/.test(body)) return 'suv';
+  if (/(convertible|cabrio|roadster|spider|spyder|targa)/.test(body)) return 'cabrio';
+  if (/(wagon|estate|avant|kombi|touring|tourer|station)/.test(body)) return 'wagon';
+  if (/(coupe|coupé|fastback|gran turismo|gt)/.test(body)) return 'sport';
+  if (/(hatchback|liftback|supermini|kleinwagen|city)/.test(body)) return 'hatch';
+  if (/(compact|kompakt)/.test(body)) return 'compact';
+  if (/(luxury|executive|full-size|oberklasse)/.test(body)) return 'luxury';
   return 'sedan';
 }
 
@@ -217,36 +226,6 @@ function carShort(car) {
   return m.slice(0, 3).toUpperCase();
 }
 
-function carSilhouette(cat, color) {
-  const wheels = (
-    <>
-      <circle cx="33" cy="45" r="9" fill="rgba(0,0,0,0.45)" />
-      <circle cx="89" cy="45" r="9" fill="rgba(0,0,0,0.45)" />
-    </>
-  );
-  let body;
-  if (cat === 'suv') {
-    body = 'M8,45 L8,30 Q8,27 12,27 L30,27 L40,15 Q42,13 47,13 L82,13 Q88,13 92,17 L104,27 L112,28 Q116,28 116,32 L116,45 Z';
-  } else if (cat === 'truck') {
-    body = 'M8,45 L8,30 Q8,27 12,27 L34,27 L42,16 Q44,14 49,14 L66,14 L70,27 L116,27 L116,45 Z';
-  } else if (cat === 'sport') {
-    body = 'M6,44 L6,36 Q6,34 9,34 L30,33 L48,22 Q52,19 60,19 L80,20 Q88,21 94,27 L112,33 Q116,34 116,37 L116,44 Z';
-  } else if (cat === 'wagon') {
-    body = 'M7,45 L7,30 Q7,27 11,27 L40,16 Q42,14 47,14 L96,14 Q101,14 101,18 L101,30 L113,30 Q116,30 116,33 L116,45 Z';
-  } else if (cat === 'ev') {
-    body = 'M7,44 L7,33 Q7,31 10,31 L34,30 L46,18 Q48,16 53,16 L80,16 Q85,16 88,19 L100,30 L113,31 Q116,31 116,34 L116,44 Z';
-  } else {
-    body = 'M7,44 L7,32 Q7,30 10,30 L34,30 L45,17 Q47,15 52,15 L78,15 Q83,15 86,18 L98,30 L113,31 Q116,31 116,34 L116,44 Z';
-  }
-  return (
-    <>
-      {wheels}
-      <path d={body} fill={color} />
-      {cat === 'ev' && <path d="M58,21 L51,33 L58,33 L54,43 L69,29 L61,29 L65,21 Z" fill="rgba(255,255,255,0.9)" />}
-    </>
-  );
-}
-
 function CarIcon({ car, size = 40, className = '' }) {
   if (!car || (!car.make && !car.model)) {
     return <span className={className} style={{ fontSize: size * 0.8, lineHeight: 1 }}>{car?.icon || '🚗'}</span>;
@@ -255,24 +234,23 @@ function CarIcon({ car, size = 40, className = '' }) {
   const cat = carCategory(car);
   const short = carShort(car);
   const showLabel = size >= 44 && short;
+  const src = CAR_ICONS[cat] || CAR_ICONS.sedan;
   return (
     <div
       className={className}
       title={`${car.make} ${car.model}`}
       style={{
-        width: size, height: size, borderRadius: size * 0.24,
-        background: `linear-gradient(145deg, hsl(${hue} 60% 30%), hsl(${hue} 65% 15%))`,
-        border: `1.5px solid hsl(${hue} 70% 50%)`,
+        width: size, height: size, borderRadius: size * 0.22,
+        background: `hsl(${hue} 45% 95%)`,
+        border: `1.5px solid hsl(${hue} 55% 58%)`,
         display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
         overflow: 'hidden', flexShrink: 0,
-        boxShadow: `0 2px 8px hsl(${hue} 60% 8% / 0.5)`,
+        boxShadow: `0 2px 6px hsl(${hue} 40% 20% / 0.35)`,
       }}
     >
-      <svg viewBox="0 0 120 56" width={size * 0.72} height={size * 0.34}>
-        {carSilhouette(cat, `hsl(${hue} 88% 72%)`)}
-      </svg>
+      <img src={src} alt={cat} style={{ width: '82%', height: showLabel ? '54%' : '70%', objectFit: 'contain' }} />
       {showLabel && (
-        <span style={{ fontSize: Math.max(7, size * 0.16), fontWeight: 800, color: '#fff', letterSpacing: '0.5px', lineHeight: 1, marginTop: size * 0.03 }}>
+        <span style={{ fontSize: Math.max(7, size * 0.16), fontWeight: 800, color: `hsl(${hue} 60% 28%)`, letterSpacing: '0.5px', lineHeight: 1, marginTop: size * 0.01 }}>
           {short}
         </span>
       )}
@@ -320,22 +298,23 @@ function demoCar(make, model, trim, d) {
     'Gearbox type': d.gear,
     'Curb weight': `${d.weight} kg`,
   };
+  if (d.body) specs['Body type'] = d.body;
   return buildCarObject(make, model, trim, specs, '');
 }
 
 const DEMO_CARS = [
-  demoCar('Volkswagen', 'Golf GTI', '2.0 TSI (245 hp)', { speed: 250, hp: 245, accel: 6.2, torque: 370, fuel: 'Gasoline', cc: 1984, cyl: 4, drive: 'Front wheel drive', gear: 'Automatic', weight: 1486 }),
-  demoCar('BMW', 'M3 Competition', '3.0 (510 hp)', { speed: 290, hp: 510, accel: 3.5, torque: 650, fuel: 'Gasoline', cc: 2993, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1730 }),
-  demoCar('Mercedes-Benz', 'A 45 S AMG', '2.0 (421 hp)', { speed: 270, hp: 421, accel: 3.9, torque: 500, fuel: 'Gasoline', cc: 1991, cyl: 4, drive: 'All wheel drive', gear: 'Automatic', weight: 1550 }),
-  demoCar('Audi', 'RS6 Avant', '4.0 V8 (600 hp)', { speed: 305, hp: 600, accel: 3.6, torque: 800, fuel: 'Gasoline', cc: 3996, cyl: 8, drive: 'All wheel drive', gear: 'Automatic', weight: 2075 }),
-  demoCar('Porsche', '911 Turbo S', '3.8 (650 hp)', { speed: 330, hp: 650, accel: 2.7, torque: 800, fuel: 'Gasoline', cc: 3745, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1640 }),
-  demoCar('Tesla', 'Model 3 Performance', 'Dual Motor (460 hp)', { speed: 261, hp: 460, accel: 3.3, torque: 660, fuel: 'Electric', drive: 'All wheel drive', gear: 'Automatic', weight: 1844 }),
-  demoCar('Ford', 'Mustang GT', '5.0 V8 (450 hp)', { speed: 250, hp: 450, accel: 4.6, torque: 529, fuel: 'Gasoline', cc: 4951, cyl: 8, drive: 'Rear wheel drive', gear: 'Automatic', weight: 1740 }),
-  demoCar('Toyota', 'GR Yaris', '1.6 (261 hp)', { speed: 230, hp: 261, accel: 5.5, torque: 360, fuel: 'Gasoline', cc: 1618, cyl: 3, drive: 'All wheel drive', gear: 'Manual', weight: 1280 }),
-  demoCar('Honda', 'Civic Type R', '2.0 (329 hp)', { speed: 275, hp: 329, accel: 5.4, torque: 420, fuel: 'Gasoline', cc: 1996, cyl: 4, drive: 'Front wheel drive', gear: 'Manual', weight: 1429 }),
-  demoCar('Nissan', 'GT-R', '3.8 V6 (570 hp)', { speed: 315, hp: 570, accel: 2.9, torque: 637, fuel: 'Gasoline', cc: 3799, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1752 }),
-  demoCar('Volkswagen', 'Polo GTI', '2.0 TSI (207 hp)', { speed: 240, hp: 207, accel: 6.5, torque: 320, fuel: 'Gasoline', cc: 1984, cyl: 4, drive: 'Front wheel drive', gear: 'Automatic', weight: 1355 }),
-  demoCar('Opel', 'Corsa', '1.2 Turbo (100 hp)', { speed: 192, hp: 100, accel: 9.9, torque: 205, fuel: 'Gasoline', cc: 1199, cyl: 3, drive: 'Front wheel drive', gear: 'Manual', weight: 1165 }),
+  demoCar('Volkswagen', 'Golf GTI', '2.0 TSI (245 hp)', { body: 'Hatchback', speed: 250, hp: 245, accel: 6.2, torque: 370, fuel: 'Gasoline', cc: 1984, cyl: 4, drive: 'Front wheel drive', gear: 'Automatic', weight: 1486 }),
+  demoCar('BMW', 'M3 Competition', '3.0 (510 hp)', { body: 'Sedan', speed: 290, hp: 510, accel: 3.5, torque: 650, fuel: 'Gasoline', cc: 2993, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1730 }),
+  demoCar('Mercedes-Benz', 'A 45 S AMG', '2.0 (421 hp)', { body: 'Hatchback', speed: 270, hp: 421, accel: 3.9, torque: 500, fuel: 'Gasoline', cc: 1991, cyl: 4, drive: 'All wheel drive', gear: 'Automatic', weight: 1550 }),
+  demoCar('Audi', 'RS6 Avant', '4.0 V8 (600 hp)', { body: 'Station wagon', speed: 305, hp: 600, accel: 3.6, torque: 800, fuel: 'Gasoline', cc: 3996, cyl: 8, drive: 'All wheel drive', gear: 'Automatic', weight: 2075 }),
+  demoCar('Porsche', '911 Turbo S', '3.8 (650 hp)', { body: 'Coupe', speed: 330, hp: 650, accel: 2.7, torque: 800, fuel: 'Gasoline', cc: 3745, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1640 }),
+  demoCar('Tesla', 'Model 3 Performance', 'Dual Motor (460 hp)', { body: 'Sedan', speed: 261, hp: 460, accel: 3.3, torque: 660, fuel: 'Electric', drive: 'All wheel drive', gear: 'Automatic', weight: 1844 }),
+  demoCar('Ford', 'Mustang GT', '5.0 V8 (450 hp)', { body: 'Coupe', speed: 250, hp: 450, accel: 4.6, torque: 529, fuel: 'Gasoline', cc: 4951, cyl: 8, drive: 'Rear wheel drive', gear: 'Automatic', weight: 1740 }),
+  demoCar('Toyota', 'GR Yaris', '1.6 (261 hp)', { body: 'Hatchback', speed: 230, hp: 261, accel: 5.5, torque: 360, fuel: 'Gasoline', cc: 1618, cyl: 3, drive: 'All wheel drive', gear: 'Manual', weight: 1280 }),
+  demoCar('Honda', 'Civic Type R', '2.0 (329 hp)', { body: 'Hatchback', speed: 275, hp: 329, accel: 5.4, torque: 420, fuel: 'Gasoline', cc: 1996, cyl: 4, drive: 'Front wheel drive', gear: 'Manual', weight: 1429 }),
+  demoCar('Nissan', 'GT-R', '3.8 V6 (570 hp)', { body: 'Coupe', speed: 315, hp: 570, accel: 2.9, torque: 637, fuel: 'Gasoline', cc: 3799, cyl: 6, drive: 'All wheel drive', gear: 'Automatic', weight: 1752 }),
+  demoCar('Volkswagen', 'Polo GTI', '2.0 TSI (207 hp)', { body: 'Hatchback', speed: 240, hp: 207, accel: 6.5, torque: 320, fuel: 'Gasoline', cc: 1984, cyl: 4, drive: 'Front wheel drive', gear: 'Automatic', weight: 1355 }),
+  demoCar('Opel', 'Corsa', '1.2 Turbo (100 hp)', { body: 'Hatchback', speed: 192, hp: 100, accel: 9.9, torque: 205, fuel: 'Gasoline', cc: 1199, cyl: 3, drive: 'Front wheel drive', gear: 'Manual', weight: 1165 }),
 ];
 
 // --- Firestore-Pfade ---
