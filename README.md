@@ -46,6 +46,6 @@ Track-Rank nutzt die Browser-Geolocations-API in Kombination mit modernen Web-Te
 ## 🚀 Live Demo & Installation
 
 ### 🌐 Live Demo ausprobieren
-Die App ist live erreichbar unter: **[track-rank.de](https://track-rank.de)** *(oder deinen entsprechenden Vercel/Cloudflare-Link eintragen)*
+Die App ist live erreichbar unter: **[track-rank.de](https://track-rank.vercel.app/)** *(oder deinen entsprechenden Vercel/Cloudflare-Link eintragen)*
 
 ---
